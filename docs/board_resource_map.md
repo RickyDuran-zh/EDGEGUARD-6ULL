@@ -1,0 +1,5 @@
+# EBF6ULL S1 Pro 资源地图
+
+## 外设对应的引脚资源
+- MPU6050 I2C1_SDA I2C1_SCL I2C地址：0xD0 -> 0x68
+- ALS PS IRLED 传感器 I2C1_SDA I2C1_SCL I2C地址：0x1E -> 0x0f
