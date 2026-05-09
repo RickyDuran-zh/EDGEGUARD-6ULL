@@ -53,7 +53,7 @@ __attribute__((section(".modinfo"))) =
 "depends=";
 
 MODULE_ALIAS("i2c:mpu6050_raw");
-MODULE_ALIAS("of:N*T*Cricky,mpu6050-raw");
-MODULE_ALIAS("of:N*T*Cricky,mpu6050-rawC*");
+MODULE_ALIAS("of:N*T*Crickyduran,i2c_mpu6050");
+MODULE_ALIAS("of:N*T*Crickyduran,i2c_mpu6050C*");
 
-MODULE_INFO(srcversion, "A37C5D8E0EB8572F5C791CE");
+MODULE_INFO(srcversion, "B9192992D6935E770CAA25C");

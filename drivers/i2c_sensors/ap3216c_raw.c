@@ -9,9 +9,10 @@
 #include <linux/mutex.h>
 #include <linux/delay.h>
 
+// 寄存器地址
 #define AP3216C_REG_SYSTEM_CONFIG   0x00
 #define AP3216C_REG_IR_DATA_LOW     0x0A
-
+// 命令
 #define AP3216C_CMD_RESET           0x04
 #define AP3216C_CMD_ENABLE_ALL      0x03
 

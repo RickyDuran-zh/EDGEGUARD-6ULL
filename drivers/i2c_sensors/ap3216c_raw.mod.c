@@ -55,4 +55,4 @@ MODULE_ALIAS("i2c:ap3216c_raw");
 MODULE_ALIAS("of:N*T*Crickyduran,i2c_ap3216c");
 MODULE_ALIAS("of:N*T*Crickyduran,i2c_ap3216cC*");
 
-MODULE_INFO(srcversion, "A70035CF5014268A78FE84A");
+MODULE_INFO(srcversion, "6DC69E9E40593C6E15A3340");

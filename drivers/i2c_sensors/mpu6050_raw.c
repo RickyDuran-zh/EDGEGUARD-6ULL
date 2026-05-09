@@ -201,7 +201,7 @@ static int mpu6050_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id mpu6050_of_match[] = {
-    { .compatible = "ricky,mpu6050-raw" },
+    { .compatible = "rickyduran,i2c_mpu6050" },
     { }
 };
 MODULE_DEVICE_TABLE(of, mpu6050_of_match);
