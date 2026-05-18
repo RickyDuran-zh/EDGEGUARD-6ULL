@@ -1,4 +1,5 @@
-arm-linux-gnueabihf-gcc -O2 -Wall sensor_hubd.c -o sensor_hubd
+app:
+	arm-linux-gnueabihf-gcc -O2 -Wall sensor_hubd.c -o sensor_hubd
 
 .PHONY:copy
 copy:
