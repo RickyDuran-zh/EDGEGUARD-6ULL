@@ -6,8 +6,10 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QSocketNotifier>
 #include <QJsonObject>
 #include <QVector>
+#include <QPoint>
 
 class MainWindow : public QMainWindow
 {
@@ -22,8 +24,14 @@ protected:
 private slots:
     void refreshStatus();
     void switchPage(int index);
+    void processTouchEvents();
+    void onMuteClicked();
+    void onAckClicked();
 
 private:
+    void initTouch();
+    QString findTouchDevice();
+    void handleTouchEnd();
     void parseArguments();
     void buildUi();
     QWidget *buildSidebar();
@@ -31,14 +39,16 @@ private:
     QWidget *buildSensorPage();
     QWidget *buildAlarmPage();
     QWidget *buildSettingsPage();
-    QWidget *buildNetworkPage();
+    QWidget *buildSystemPage();
     QWidget *makeCard(const QString &title, QLabel **valueLabel, const QString &initial = "--");
     QLabel *makeTitle(const QString &text);
     QLabel *makeSmallText(const QString &text);
     bool loadStatusFromFile(QJsonObject *obj);
     QJsonObject makeDemoStatus();
     void applyStatus(const QJsonObject &obj, bool demo);
+    void applyServiceLost();
     void updateNavStyle();
+    void sendCommand(const QString &cmd);
     QString valueToString(const QJsonObject &obj, const QString &key, const QString &fallback = "--") const;
     int valueToInt(const QJsonObject &obj, const QString &key, int fallback = 0) const;
 
@@ -49,6 +59,7 @@ private:
     QString m_statusPath;
     bool m_demoMode;
     int m_demoCounter;
+    int m_consecutiveFailures;
 
     QLabel *m_modeBadge;
     QLabel *m_stateLabel;
@@ -64,17 +75,31 @@ private:
     QLabel *m_gyroLabel;
     QLabel *m_ap3216cLabel;
     QLabel *m_rawTempLabel;
+    QLabel *m_mpuOnlineLabel;
+    QLabel *m_apOnlineLabel;
 
     QLabel *m_alarmStateLabel;
     QLabel *m_alarmCountLabel;
     QLabel *m_lastAlarmLabel;
+    QPushButton *m_muteBtn;
+    QPushButton *m_ackBtn;
 
     QLabel *m_intervalLabel;
     QLabel *m_thresholdLabel;
 
     QLabel *m_ipLabel;
-    QLabel *m_uploadLabel;
+    QLabel *m_uptimeLabel;
+    QLabel *m_serviceLabel;
     QLabel *m_networkLabel;
+
+    // Touch input (raw evdev — do NOT modify)
+    int m_touchFd;
+    QSocketNotifier *m_touchNotifier;
+    QString m_touchDevice;
+    int m_touchCurX, m_touchCurY;
+    int m_touchStartX, m_touchStartY;
+    bool m_touchDown;
+    bool m_touchHandled;
 };
 
 #endif // MAINWINDOW_H
