@@ -1,0 +1,18 @@
+[Unit]
+Description=EdgeGuard UI
+After=edgeguard.service
+Wants=edgeguard.service
+
+[Service]
+Type=simple
+Environment="QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0"
+Environment="QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/plugins"
+Environment="QT_QPA_FONTDIR=/usr/lib/fonts"
+ExecStart=/imx6ull/ui/edgeguard-ui --status /tmp/edgeguard_status.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

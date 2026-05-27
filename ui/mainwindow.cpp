@@ -10,6 +10,13 @@
 #include <QKeyEvent>
 #include <QRandomGenerator>
 #include <QTextStream>
+#include <QDebug>
+
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <linux/input.h>
 
 static const char *kBaseStyle = R"(
     QMainWindow { background: #07111f; }
@@ -64,7 +71,26 @@ static const char *kBaseStyle = R"(
     QPushButton#NavButton:pressed {
         background: #2b80ff;
     }
+    QPushButton#ActionButton {
+        background: #1f6feb;
+        color: #ffffff;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 700;
+    }
+    QPushButton#ActionButton:pressed {
+        background: #2b80ff;
+    }
 )";
+
+static const int kSwipeThreshold = 70;
+static const int kTapRadius       = 20;
+static const int kSidebarWidth    = 166;
+static const int kMaxFailures     = 3;
+static const char *kCmdTmpPath    = "/tmp/edgeguard_cmd.json.tmp";
+static const char *kCmdPath       = "/tmp/edgeguard_cmd.json";
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -73,6 +99,7 @@ MainWindow::MainWindow(QWidget *parent)
       m_statusPath("/tmp/edgeguard_status.json"),
       m_demoMode(false),
       m_demoCounter(0),
+      m_consecutiveFailures(0),
       m_modeBadge(nullptr),
       m_stateLabel(nullptr),
       m_alarmReasonLabel(nullptr),
@@ -86,17 +113,31 @@ MainWindow::MainWindow(QWidget *parent)
       m_gyroLabel(nullptr),
       m_ap3216cLabel(nullptr),
       m_rawTempLabel(nullptr),
+      m_mpuOnlineLabel(nullptr),
+      m_apOnlineLabel(nullptr),
       m_alarmStateLabel(nullptr),
       m_alarmCountLabel(nullptr),
       m_lastAlarmLabel(nullptr),
+      m_muteBtn(nullptr),
+      m_ackBtn(nullptr),
       m_intervalLabel(nullptr),
       m_thresholdLabel(nullptr),
       m_ipLabel(nullptr),
-      m_uploadLabel(nullptr),
-      m_networkLabel(nullptr)
+      m_uptimeLabel(nullptr),
+      m_serviceLabel(nullptr),
+      m_networkLabel(nullptr),
+      m_touchFd(-1),
+      m_touchNotifier(nullptr),
+      m_touchCurX(-1),
+      m_touchCurY(-1),
+      m_touchStartX(-1),
+      m_touchStartY(-1),
+      m_touchDown(false),
+      m_touchHandled(false)
 {
     parseArguments();
     buildUi();
+    initTouch();
 
     connect(m_timer, &QTimer::timeout, this, &MainWindow::refreshStatus);
     m_timer->start(500);
@@ -111,8 +152,10 @@ void MainWindow::parseArguments()
             m_demoMode = true;
         } else if (args[i] == "--status" && i + 1 < args.size()) {
             m_statusPath = args[++i];
+        } else if (args[i] == "--touch" && i + 1 < args.size()) {
+            m_touchDevice = args[++i];
         } else if (args[i] == "--page" && i + 1 < args.size()) {
-            // Applied after UI creation in buildUi(). Kept simple here.
+            // Applied after UI creation in buildUi().
         }
     }
 }
@@ -135,7 +178,7 @@ void MainWindow::buildUi()
     m_stack->addWidget(buildSensorPage());
     m_stack->addWidget(buildAlarmPage());
     m_stack->addWidget(buildSettingsPage());
-    m_stack->addWidget(buildNetworkPage());
+    m_stack->addWidget(buildSystemPage());
     mainLayout->addWidget(m_stack, 1);
 
     setCentralWidget(root);
@@ -171,7 +214,7 @@ QWidget *MainWindow::buildSidebar()
     layout->addWidget(sub);
     layout->addSpacing(14);
 
-    const QStringList names = {"1  Dashboard", "2  Sensors", "3  Alarms", "4  Settings", "5  Network"};
+    const QStringList names = {"1  Dashboard", "2  Sensors", "3  Alarms", "4  Settings", "5  System"};
     for (int i = 0; i < names.size(); ++i) {
         QPushButton *btn = new QPushButton(names[i], side);
         btn->setObjectName("NavButton");
@@ -183,7 +226,7 @@ QWidget *MainWindow::buildSidebar()
     }
 
     layout->addStretch(1);
-    QLabel *hint = makeSmallText("No touch yet:\nuse --page N or\nkeyboard 1-5.");
+    QLabel *hint = makeSmallText("Swipe or tap\nsidebar to\nswitch pages.");
     layout->addWidget(hint);
 
     return side;
@@ -234,8 +277,17 @@ QWidget *MainWindow::buildSensorPage()
     grid->addWidget(makeCard("MPU6050 Accel", &m_accelLabel), 0, 0);
     grid->addWidget(makeCard("MPU6050 Gyro", &m_gyroLabel), 0, 1);
     grid->addWidget(makeCard("AP3216C", &m_ap3216cLabel), 1, 0);
-    grid->addWidget(makeCard("Temp Raw", &m_rawTempLabel), 1, 1);
-    layout->addLayout(grid, 1);
+    grid->addWidget(makeCard("Temperature", &m_rawTempLabel), 1, 1);
+
+    QHBoxLayout *onlineRow = new QHBoxLayout();
+    m_mpuOnlineLabel = makeSmallText("MPU6050: --");
+    m_apOnlineLabel  = makeSmallText("AP3216C: --");
+    onlineRow->addWidget(m_mpuOnlineLabel);
+    onlineRow->addWidget(m_apOnlineLabel);
+    onlineRow->addStretch(1);
+    layout->addLayout(onlineRow);
+
+    layout->addStretch(1);
     return page;
 }
 
@@ -251,7 +303,27 @@ QWidget *MainWindow::buildAlarmPage()
     grid->addWidget(makeCard("Current Alarm", &m_alarmStateLabel), 0, 0);
     grid->addWidget(makeCard("Alarm Count", &m_alarmCountLabel), 0, 1);
     grid->addWidget(makeCard("Last Alarm", &m_lastAlarmLabel), 1, 0, 1, 2);
-    layout->addLayout(grid, 1);
+    layout->addLayout(grid);
+
+    /* Action buttons */
+    QHBoxLayout *btnRow = new QHBoxLayout();
+    btnRow->setSpacing(16);
+
+    m_muteBtn = new QPushButton("Mute Buzzer", page);
+    m_muteBtn->setObjectName("ActionButton");
+    m_muteBtn->setMinimumHeight(42);
+    connect(m_muteBtn, &QPushButton::clicked, this, &MainWindow::onMuteClicked);
+    btnRow->addWidget(m_muteBtn);
+
+    m_ackBtn = new QPushButton("Acknowledge", page);
+    m_ackBtn->setObjectName("ActionButton");
+    m_ackBtn->setMinimumHeight(42);
+    connect(m_ackBtn, &QPushButton::clicked, this, &MainWindow::onAckClicked);
+    btnRow->addWidget(m_ackBtn);
+
+    btnRow->addStretch(1);
+    layout->addLayout(btnRow);
+    layout->addStretch(1);
     return page;
 }
 
@@ -270,18 +342,19 @@ QWidget *MainWindow::buildSettingsPage()
     return page;
 }
 
-QWidget *MainWindow::buildNetworkPage()
+QWidget *MainWindow::buildSystemPage()
 {
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("Network"));
+    layout->addWidget(makeTitle("System"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
     grid->addWidget(makeCard("Board IP", &m_ipLabel), 0, 0);
-    grid->addWidget(makeCard("Upload Status", &m_uploadLabel), 0, 1);
-    grid->addWidget(makeCard("Link", &m_networkLabel), 1, 0, 1, 2);
+    grid->addWidget(makeCard("Uptime (sec)", &m_uptimeLabel), 0, 1);
+    grid->addWidget(makeCard("sensor_hubd", &m_serviceLabel), 1, 0);
+    grid->addWidget(makeCard("Network Link", &m_networkLabel), 1, 1);
     layout->addLayout(grid, 1);
     return page;
 }
@@ -351,6 +424,179 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     }
 }
 
+/* ---- Touch / Swipe (raw evdev — UNCHANGED) ---- */
+
+QString MainWindow::findTouchDevice()
+{
+    QFile file("/proc/bus/input/devices");
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return QString();
+
+    bool inTarget = false;
+    while (!file.atEnd()) {
+        const QByteArray line = file.readLine();
+
+        if (line.startsWith("N:") && line.contains("Name=")) {
+            const QByteArray lower = line.toLower();
+            inTarget = lower.contains("goodix") ||
+                       lower.contains("gt9157") ||
+                       lower.contains("gt911");
+        }
+
+        if (inTarget && line.startsWith("H:") && line.contains("Handlers=")) {
+            int idx = line.indexOf("event");
+            if (idx >= 0) {
+                bool ok = false;
+                int num = line.mid(idx + 5).toInt(&ok);
+                if (ok && num >= 0) {
+                    file.close();
+                    return QString("/dev/input/event%1").arg(num);
+                }
+            }
+        }
+    }
+
+    return QString();
+}
+
+void MainWindow::initTouch()
+{
+    if (m_touchDevice.isEmpty())
+        m_touchDevice = findTouchDevice();
+
+    if (m_touchDevice.isEmpty()) {
+        qWarning("No touch device found, touch disabled");
+        return;
+    }
+
+    m_touchFd = ::open(m_touchDevice.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
+    if (m_touchFd < 0) {
+        qWarning("Failed to open %s: %s",
+                 qPrintable(m_touchDevice), strerror(errno));
+        return;
+    }
+
+    m_touchNotifier = new QSocketNotifier(m_touchFd, QSocketNotifier::Read, this);
+    connect(m_touchNotifier, &QSocketNotifier::activated,
+            this, &MainWindow::processTouchEvents);
+
+    qDebug("Touch device: %s", qPrintable(m_touchDevice));
+}
+
+void MainWindow::handleTouchEnd()
+{
+    int dx = m_touchCurX - m_touchStartX;
+    int dy = m_touchCurY - m_touchStartY;
+    int cur = m_stack ? m_stack->currentIndex() : 0;
+    int cnt = m_stack ? m_stack->count() : 0;
+
+    if (abs(dy) > kSwipeThreshold && abs(dx) < abs(dy)) {
+        if (dy > 0 && cur < cnt - 1)
+            switchPage(cur + 1);
+        else if (dy < 0 && cur > 0)
+            switchPage(cur - 1);
+        goto reset;
+    }
+
+    if (abs(dx) <= kTapRadius && abs(dy) <= kTapRadius &&
+        m_touchStartX >= 0 && m_touchStartX < kSidebarWidth) {
+
+        int y = m_touchStartY;
+        if      (y >=  88 && y < 132) switchPage(0);
+        else if (y >= 140 && y < 184) switchPage(1);
+        else if (y >= 192 && y < 236) switchPage(2);
+        else if (y >= 244 && y < 288) switchPage(3);
+        else if (y >= 296 && y < 340) switchPage(4);
+    }
+
+reset:
+    m_touchStartX = -1;
+    m_touchStartY = -1;
+}
+
+void MainWindow::processTouchEvents()
+{
+    struct input_event ev;
+    ssize_t n;
+
+    while (true) {
+        n = ::read(m_touchFd, &ev, sizeof(ev));
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break;
+            qWarning("Error reading touch device: %s", strerror(errno));
+            return;
+        }
+        if (n != (ssize_t)sizeof(ev))
+            break;
+
+        switch (ev.type) {
+        case EV_ABS:
+            if (ev.code == ABS_MT_POSITION_X || ev.code == ABS_X) {
+                m_touchCurX = ev.value;
+                if (m_touchDown && m_touchStartX < 0)
+                    m_touchStartX = ev.value;
+            } else if (ev.code == ABS_MT_POSITION_Y || ev.code == ABS_Y) {
+                m_touchCurY = ev.value;
+                if (m_touchDown && m_touchStartY < 0)
+                    m_touchStartY = ev.value;
+            } else if (ev.code == ABS_MT_TRACKING_ID) {
+                if (ev.value >= 0 && !m_touchDown) {
+                    m_touchDown = true;
+                    m_touchHandled = false;
+                } else if (ev.value < 0 && m_touchDown && !m_touchHandled) {
+                    m_touchDown = false;
+                    handleTouchEnd();
+                    m_touchHandled = true;
+                }
+            }
+            break;
+        case EV_KEY:
+            if (ev.code == BTN_TOUCH) {
+                if (ev.value == 1 && !m_touchDown) {
+                    m_touchDown = true;
+                    m_touchHandled = false;
+                } else if (ev.value == 0 && m_touchDown && !m_touchHandled) {
+                    m_touchDown = false;
+                    handleTouchEnd();
+                    m_touchHandled = true;
+                }
+            }
+            break;
+        }
+    }
+}
+
+/* ---- Command channel ---- */
+
+void MainWindow::sendCommand(const QString &cmd)
+{
+    QFile file(kCmdTmpPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return;
+
+    QJsonObject obj;
+    obj["cmd"] = cmd;
+    QJsonDocument doc(obj);
+    file.write(doc.toJson(QJsonDocument::Compact));
+    file.close();
+
+    ::rename(kCmdTmpPath, kCmdPath);
+    qDebug("Command sent: %s", qPrintable(cmd));
+}
+
+void MainWindow::onMuteClicked()
+{
+    sendCommand("mute_buzzer");
+}
+
+void MainWindow::onAckClicked()
+{
+    sendCommand("ack_alarm");
+}
+
+/* ---- Data loading ---- */
+
 bool MainWindow::loadStatusFromFile(QJsonObject *obj)
 {
     QFile file(m_statusPath);
@@ -384,62 +630,181 @@ QJsonObject MainWindow::makeDemoStatus()
     int ps = 18 + phase * 3;
 
     if (phase > 18 && phase <= 24) {
-        state = "LIGHT_ALARM";
-        reason = "low light / blocked";
+        state = "WARNING";
+        reason = "low ambient light";
         led = "yellow";
         als = 45;
     } else if (phase > 24) {
-        state = "MOTION_ALARM";
+        state = "ALARM";
         reason = "motion threshold exceeded";
         led = "red";
         buzzer = "beep";
         motion = 15600;
     }
 
+    /* Build nested demo JSON matching new protocol */
+    QJsonObject mpu;
+    mpu["ax"] = 100 + phase * 3;
+    mpu["ay"] = -30 + phase;
+    mpu["az"] = 16320 - phase * 2;
+    mpu["gx"] = 3 + phase;
+    mpu["gy"] = -1;
+    mpu["gz"] = phase / 2;
+    mpu["temp"] = 25.0 + phase * 0.1;
+    mpu["motion_delta"] = motion;
+    mpu["online"] = true;
+
+    QJsonObject ap3216;
+    ap3216["ir"] = 15 + phase;
+    ap3216["als"] = als;
+    ap3216["ps"] = ps;
+    ap3216["online"] = true;
+
+    QJsonObject device;
+    device["led"] = led;
+    device["buzzer"] = buzzer;
+    device["key"] = "released";
+
+    QJsonObject alarm;
+    alarm["count"] = phase > 24 ? 3 : 2;
+    alarm["last"] = phase > 18 ? "2026-05-26 18:20:00" : "none";
+    alarm["muted"] = false;
+    alarm["acknowledged"] = false;
+
+    QJsonObject sys;
+    sys["uptime_sec"] = (double)(m_demoCounter * 30);
+    sys["ip"] = "192.168.10.2";
+    sys["sensor_hubd"] = "running";
+
     obj["state"] = state;
     obj["alarm_reason"] = reason;
-    obj["motion_delta"] = motion;
-    obj["ir"] = 15 + phase;
-    obj["als"] = als;
-    obj["ps"] = ps;
-    obj["ax"] = 100 + phase * 3;
-    obj["ay"] = -30 + phase;
-    obj["az"] = 16320 - phase * 2;
-    obj["gx"] = 3 + phase;
-    obj["gy"] = -1;
-    obj["gz"] = phase / 2;
-    obj["temp_raw"] = 5200 + phase;
-    obj["led"] = led;
-    obj["buzzer"] = buzzer;
-    obj["alarm_count"] = phase > 24 ? 3 : 2;
-    obj["last_alarm"] = phase > 18 ? "recent" : "none";
-    obj["sample_interval_ms"] = 500;
-    obj["als_low_threshold"] = 80;
-    obj["ps_high_threshold"] = 200;
-    obj["motion_threshold"] = 12000;
-    obj["ip"] = "192.168.10.2";
-    obj["upload"] = "disabled";
-    obj["network"] = "eth0 ready";
+    obj["timestamp_ms"] = (double)(m_demoCounter * 500);
+    obj["mpu6050"] = mpu;
+    obj["ap3216c"] = ap3216;
+    obj["device"] = device;
+    obj["alarm"] = alarm;
+    obj["system"] = sys;
+
     return obj;
+}
+
+/* ---- Status application (nested JSON) ---- */
+
+void MainWindow::applyServiceLost()
+{
+    m_consecutiveFailures++;
+    if (m_consecutiveFailures > kMaxFailures) {
+        m_modeBadge->setText("SERVICE LOST");
+        m_modeBadge->setStyleSheet("background: #ff5c5c; color: #ffffff; "
+                                   "border-radius: 12px; padding: 5px 12px; "
+                                   "font-size: 12px; font-weight: 700;");
+    }
+}
+
+void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
+{
+    m_consecutiveFailures = 0;
+
+    /* Top-level */
+    const QString state   = valueToString(obj, "state", "UNKNOWN");
+    const QString reason  = valueToString(obj, "alarm_reason", "none");
+
+    /* Nested groups */
+    QJsonObject mpu    = obj.value("mpu6050").toObject();
+    QJsonObject ap3216 = obj.value("ap3216c").toObject();
+    QJsonObject device = obj.value("device").toObject();
+    QJsonObject alarm  = obj.value("alarm").toObject();
+    QJsonObject sys    = obj.value("system").toObject();
+
+    /* ---- Dashboard ---- */
+    m_modeBadge->setText(demo ? "DEMO" : "LIVE");
+    m_modeBadge->setStyleSheet("");  /* reset to default */
+
+    m_stateLabel->setText(state);
+    m_alarmReasonLabel->setText(reason);
+    m_alsLabel->setText(QString::number(valueToInt(ap3216, "als")));
+    m_psLabel->setText(QString::number(valueToInt(ap3216, "ps")));
+    m_motionLabel->setText(QString::number(valueToInt(mpu, "motion_delta")));
+    m_ledLabel->setText(QString("%1 / %2")
+                        .arg(valueToString(device, "led", "--"),
+                             valueToString(device, "buzzer", "--")));
+    m_timeLabel->setText("Last update: " +
+                         QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+
+    /* ---- Sensors ---- */
+    m_accelLabel->setText(QString("%1, %2, %3")
+                          .arg(valueToInt(mpu, "ax"))
+                          .arg(valueToInt(mpu, "ay"))
+                          .arg(valueToInt(mpu, "az")));
+    m_gyroLabel->setText(QString("%1, %2, %3")
+                          .arg(valueToInt(mpu, "gx"))
+                          .arg(valueToInt(mpu, "gy"))
+                          .arg(valueToInt(mpu, "gz")));
+    m_ap3216cLabel->setText(QString("IR=%1\nALS=%2\nPS=%3")
+                            .arg(valueToInt(ap3216, "ir"))
+                            .arg(valueToInt(ap3216, "als"))
+                            .arg(valueToInt(ap3216, "ps")));
+    /* temp is a double in new protocol */
+    {
+        QJsonValue tv = mpu.value("temp");
+        if (tv.isDouble())
+            m_rawTempLabel->setText(QString::number(tv.toDouble(), 'f', 1) + " C");
+        else
+            m_rawTempLabel->setText(valueToString(mpu, "temp", "--"));
+    }
+    m_mpuOnlineLabel->setText(QString("MPU6050: %1")
+                              .arg(mpu.value("online").toBool() ? "ONLINE" : "OFFLINE"));
+    m_apOnlineLabel->setText(QString("AP3216C: %1")
+                              .arg(ap3216.value("online").toBool() ? "ONLINE" : "OFFLINE"));
+
+    /* ---- Alarms ---- */
+    m_alarmStateLabel->setText(state + "\n" + reason);
+    m_alarmCountLabel->setText(valueToString(alarm, "count", "0"));
+    m_lastAlarmLabel->setText(valueToString(alarm, "last", "none"));
+
+    /* ---- Settings ---- */
+    /* Note: thresholds live in config now, not in status JSON.
+       We display them from status sample for demo, or show placeholders. */
+    m_intervalLabel->setText("500 ms (config)");
+    m_thresholdLabel->setText("See /etc/edgeguard/config.json");
+
+    /* ---- System ---- */
+    m_ipLabel->setText(valueToString(sys, "ip", "--"));
+    {
+        QJsonValue uv = sys.value("uptime_sec");
+        if (uv.isDouble())
+            m_uptimeLabel->setText(QString::number((int)uv.toDouble()));
+        else
+            m_uptimeLabel->setText(valueToString(sys, "uptime_sec", "--"));
+    }
+    m_serviceLabel->setText(valueToString(sys, "sensor_hubd", "unknown"));
+    m_networkLabel->setText("eth0 up");
+
+    /* ---- Color-coding ---- */
+    if (state.contains("FAULT")) {
+        m_stateLabel->setStyleSheet("color: #ff5c5c; font-size: 26px; font-weight: 900;");
+    } else if (state.contains("ALARM")) {
+        m_stateLabel->setStyleSheet("color: #ff5c5c; font-size: 26px; font-weight: 900;");
+    } else if (state.contains("WARNING")) {
+        m_stateLabel->setStyleSheet("color: #ffd166; font-size: 26px; font-weight: 900;");
+    } else {
+        m_stateLabel->setStyleSheet("color: #4ade80; font-size: 26px; font-weight: 900;");
+    }
 }
 
 QString MainWindow::valueToString(const QJsonObject &obj, const QString &key, const QString &fallback) const
 {
     const QJsonValue v = obj.value(key);
-    if (v.isString())
-        return v.toString();
-    if (v.isDouble())
-        return QString::number(v.toInt());
-    if (v.isBool())
-        return v.toBool() ? "true" : "false";
+    if (v.isString())  return v.toString();
+    if (v.isDouble())  return QString::number(v.toInt());
+    if (v.isBool())    return v.toBool() ? "true" : "false";
     return fallback;
 }
 
 int MainWindow::valueToInt(const QJsonObject &obj, const QString &key, int fallback) const
 {
     const QJsonValue v = obj.value(key);
-    if (v.isDouble())
-        return v.toInt();
+    if (v.isDouble())  return v.toInt();
     if (v.isString()) {
         bool ok = false;
         int n = v.toString().toInt(&ok);
@@ -455,67 +820,12 @@ void MainWindow::refreshStatus()
 
     if (!demo) {
         if (!loadStatusFromFile(&obj)) {
-            demo = true;
-            obj = makeDemoStatus();
+            applyServiceLost();
+            return;
         }
     } else {
         obj = makeDemoStatus();
     }
 
     applyStatus(obj, demo);
-}
-
-void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
-{
-    const QString state = valueToString(obj, "state", "UNKNOWN");
-    const QString reason = valueToString(obj, "alarm_reason", "none");
-    const QString led = valueToString(obj, "led", "--");
-    const QString buzzer = valueToString(obj, "buzzer", "--");
-    const int ax = valueToInt(obj, "ax");
-    const int ay = valueToInt(obj, "ay");
-    const int az = valueToInt(obj, "az");
-    const int gx = valueToInt(obj, "gx");
-    const int gy = valueToInt(obj, "gy");
-    const int gz = valueToInt(obj, "gz");
-    const int ir = valueToInt(obj, "ir");
-    const int als = valueToInt(obj, "als");
-    const int ps = valueToInt(obj, "ps");
-    const int motion = valueToInt(obj, "motion_delta");
-
-    m_modeBadge->setText(demo ? "DEMO / NO STATUS FILE" : "LIVE");
-    m_stateLabel->setText(state);
-    m_alarmReasonLabel->setText(reason);
-    m_alsLabel->setText(QString::number(als));
-    m_psLabel->setText(QString::number(ps));
-    m_motionLabel->setText(QString::number(motion));
-    m_ledLabel->setText(QString("%1 / %2").arg(led, buzzer));
-    m_buzzerLabel = nullptr;
-    m_timeLabel->setText("Last update: " + QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-
-    m_accelLabel->setText(QString("%1, %2, %3").arg(ax).arg(ay).arg(az));
-    m_gyroLabel->setText(QString("%1, %2, %3").arg(gx).arg(gy).arg(gz));
-    m_ap3216cLabel->setText(QString("IR=%1\nALS=%2\nPS=%3").arg(ir).arg(als).arg(ps));
-    m_rawTempLabel->setText(valueToString(obj, "temp_raw", "--"));
-
-    m_alarmStateLabel->setText(state + "\n" + reason);
-    m_alarmCountLabel->setText(valueToString(obj, "alarm_count", "0"));
-    m_lastAlarmLabel->setText(valueToString(obj, "last_alarm", "none"));
-
-    m_intervalLabel->setText(valueToString(obj, "sample_interval_ms", "500") + " ms");
-    m_thresholdLabel->setText(QString("ALS < %1\nPS > %2\nMotion > %3")
-                              .arg(valueToString(obj, "als_low_threshold", "80"),
-                                   valueToString(obj, "ps_high_threshold", "200"),
-                                   valueToString(obj, "motion_threshold", "12000")));
-
-    m_ipLabel->setText(valueToString(obj, "ip", "--"));
-    m_uploadLabel->setText(valueToString(obj, "upload", "disabled"));
-    m_networkLabel->setText(valueToString(obj, "network", "unknown"));
-
-    if (state.contains("MOTION") || state.contains("ALARM")) {
-        m_stateLabel->setStyleSheet("color: #ff5c5c; font-size: 26px; font-weight: 900;");
-    } else if (state.contains("WARNING") || state.contains("LIGHT") || state.contains("PROXIMITY")) {
-        m_stateLabel->setStyleSheet("color: #ffd166; font-size: 26px; font-weight: 900;");
-    } else {
-        m_stateLabel->setStyleSheet("color: #4ade80; font-size: 26px; font-weight: 900;");
-    }
 }

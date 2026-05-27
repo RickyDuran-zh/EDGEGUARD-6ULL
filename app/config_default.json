@@ -1,0 +1,11 @@
+{
+  "sample_interval_ms": 500,
+  "als_low_threshold": 80,
+  "ps_warning_threshold": 120,
+  "ps_alarm_threshold": 220,
+  "motion_warning_threshold": 8000,
+  "motion_alarm_threshold": 15000,
+  "buzzer_enable": true,
+  "led_enable": true,
+  "log_enable": true
+}
