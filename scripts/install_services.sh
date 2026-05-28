@@ -13,6 +13,8 @@ echo "Installing EdgeGuard systemd services from: $SCRIPT_DIR"
 # --- Copy service files ---
 cp "$SCRIPT_DIR/edgeguard.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/edgeguard-ui.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/edgeguard-httpd.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/edgeguard-mqttd.service" /etc/systemd/system/
 
 # --- Create default config if missing ---
 # (sensor_hubd also auto-creates this on first start, but we do it here
@@ -39,13 +41,19 @@ fi
 systemctl daemon-reload
 systemctl enable edgeguard.service
 systemctl enable edgeguard-ui.service
+systemctl enable edgeguard-httpd.service
+systemctl enable edgeguard-mqttd.service
 systemctl restart edgeguard.service
 sleep 1
+systemctl restart edgeguard-httpd.service
+systemctl restart edgeguard-mqttd.service
 systemctl restart edgeguard-ui.service
 
 echo ""
 echo "Done. Check status with:"
 echo "  systemctl status edgeguard"
 echo "  systemctl status edgeguard-ui"
+echo "  systemctl status edgeguard-httpd"
+echo "  systemctl status edgeguard-mqttd"
 echo "  journalctl -u edgeguard -f"
 echo "  tail -f /var/log/edgeguard/alarm.log"

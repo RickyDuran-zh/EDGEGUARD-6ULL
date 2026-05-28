@@ -278,6 +278,7 @@ QWidget *MainWindow::buildSensorPage()
     grid->addWidget(makeCard("MPU6050 Gyro", &m_gyroLabel), 0, 1);
     grid->addWidget(makeCard("AP3216C", &m_ap3216cLabel), 1, 0);
     grid->addWidget(makeCard("Temperature", &m_rawTempLabel), 1, 1);
+    layout->addLayout(grid, 1);
 
     QHBoxLayout *onlineRow = new QHBoxLayout();
     m_mpuOnlineLabel = makeSmallText("MPU6050: --");
@@ -287,7 +288,6 @@ QWidget *MainWindow::buildSensorPage()
     onlineRow->addStretch(1);
     layout->addLayout(onlineRow);
 
-    layout->addStretch(1);
     return page;
 }
 

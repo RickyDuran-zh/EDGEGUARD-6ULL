@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <linux/input.h>
+#include "sqlite3.h"
 
 /* ---- device nodes ---- */
 #define MPU6050_DEV       "/dev/mpu6050_raw"
@@ -30,6 +31,7 @@
 #define CONFIG_DIR        "/etc/edgeguard"
 #define LOG_DIR           "/var/log/edgeguard"
 #define LOG_PATH          "/var/log/edgeguard/alarm.log"
+#define ALARM_DB_PATH     "/var/log/edgeguard/alarms.db"
 
 #define BUF_SIZE          512
 #define CONFIG_BUF_SIZE   4096
@@ -97,6 +99,8 @@ static long long   g_startup_ms       = 0;
 
 static int         g_last_led_toggle_ms   = 0;
 static int         g_last_beep_ms         = 0;
+
+static sqlite3    *g_db = NULL;
 
 /* ---- helpers ---- */
 static const char *state_to_string(enum alarm_state s)
@@ -372,6 +376,76 @@ static void log_event(const struct app_config *cfg, const char *level, const cha
     fclose(fp);
 }
 
+/* ---- SQLite alarm database ---- */
+static int db_init(void)
+{
+    int rc = sqlite3_open(ALARM_DB_PATH, &g_db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "[ERR] sqlite3_open: %s\n", sqlite3_errmsg(g_db));
+        g_db = NULL;
+        return -1;
+    }
+    const char *sql =
+        "CREATE TABLE IF NOT EXISTS alarm_events ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  timestamp TEXT NOT NULL,"
+        "  state TEXT NOT NULL,"
+        "  reason TEXT,"
+        "  motion_delta INTEGER,"
+        "  ps INTEGER, als INTEGER,"
+        "  mpu_temp REAL,"
+        "  acknowledged INTEGER DEFAULT 0"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_ts ON alarm_events(timestamp);";
+    char *err = NULL;
+    rc = sqlite3_exec(g_db, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "[ERR] db create table: %s\n", err);
+        sqlite3_free(err);
+    }
+    sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    printf("[INFO] alarm database opened: %s\n", ALARM_DB_PATH);
+    return 0;
+}
+
+static void db_log_alarm(const char *state_str, const char *reason,
+                          int motion_delta, int ps, int als,
+                          double mpu_temp, int acknowledged)
+{
+    if (!g_db) return;
+    char ts[32];
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    localtime_r(&now, &tm_buf);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    const char *sql =
+        "INSERT INTO alarm_events "
+        "(timestamp, state, reason, motion_delta, ps, als, mpu_temp, acknowledged) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt,  1, ts, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt,  2, state_str, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt,  3, reason, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt,   4, motion_delta);
+    sqlite3_bind_int(stmt,   5, ps);
+    sqlite3_bind_int(stmt,   6, als);
+    sqlite3_bind_double(stmt,7, mpu_temp);
+    sqlite3_bind_int(stmt,   8, acknowledged);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+static void db_close(void)
+{
+    if (g_db) {
+        sqlite3_close(g_db);
+        g_db = NULL;
+        printf("[INFO] alarm database closed\n");
+    }
+}
+
 /* ---- JSON status writer ---- */
 static void get_network_info(char *ip_out, size_t ip_size)
 {
@@ -530,6 +604,13 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         snprintf(g_cur_led, sizeof(g_cur_led), "green");
         snprintf(g_cur_buzzer, sizeof(g_cur_buzzer), "off");
         log_event(cfg, "INFO", "alarm acknowledged");
+    } else if (!strcmp(cmd, "demo_alarm")) {
+        g_alarm_count++;
+        g_last_alarm_time = time(NULL);
+        g_acknowledged = 0;
+        g_muted = 0;
+        *state = STATE_ALARM;
+        log_event(cfg, "INFO", "demo alarm triggered");
     }
 
     unlink(CMD_JSON_PATH);
@@ -763,6 +844,9 @@ int main(int argc, char *argv[])
     if (load_config(&cfg) < 0)
         printf("[WARN] using default config values\n");
 
+    mkdir(LOG_DIR, 0755);
+    db_init();
+
     memset(&mpu, 0, sizeof(mpu));
     memset(&prev_mpu, 0, sizeof(prev_mpu));
     memset(&ap, 0, sizeof(ap));
@@ -823,6 +907,15 @@ int main(int argc, char *argv[])
             log_event(&cfg,
                       state == STATE_NORMAL ? "INFO" : "ALARM",
                       msg);
+            /* log to SQLite on state transitions */
+            {
+                double t = mpu.valid ? (mpu.temp / 340.0 + 36.53) : 0.0;
+                const char *reason = get_alarm_reason(state, motion_delta,
+                    ap.ps, ap.als, mpu_ok, ap_ok);
+                db_log_alarm(state_to_string(state), reason,
+                             motion_delta, ap.ps, ap.als, t,
+                             (state == STATE_NORMAL) ? 1 : 0);
+            }
         }
 
         /* LED / buzzer blink */
@@ -847,5 +940,6 @@ int main(int argc, char *argv[])
     log_event(&cfg, "INFO", "sensor_hubd stopped");
 
     if (key_fd >= 0) close(key_fd);
+    db_close();
     return 0;
 }
