@@ -1,26 +1,46 @@
 {
   "state": "NORMAL",
   "alarm_reason": "none",
-  "motion_delta": 3620,
-  "ax": 120,
-  "ay": -30,
-  "az": 16320,
-  "gx": 3,
-  "gy": -1,
-  "gz": 0,
-  "temp_raw": 5200,
-  "ir": 15,
-  "als": 420,
-  "ps": 6,
-  "led": "green",
-  "buzzer": "off",
-  "alarm_count": 0,
-  "last_alarm": "none",
-  "sample_interval_ms": 500,
-  "als_low_threshold": 80,
-  "ps_high_threshold": 200,
-  "motion_threshold": 12000,
-  "ip": "192.168.10.2",
-  "upload": "disabled",
-  "network": "eth0 ready"
+  "timestamp_ms": 45200,
+  "mpu6050": {
+    "ax": 120,
+    "ay": -30,
+    "az": 16320,
+    "gx": 3,
+    "gy": -1,
+    "gz": 0,
+    "temp": 36.5,
+    "motion_delta": 3620,
+    "online": true
+  },
+  "ap3216c": {
+    "ir": 15,
+    "als": 420,
+    "ps": 6,
+    "online": true
+  },
+  "device": {
+    "led": "green",
+    "buzzer": "off",
+    "key": "released"
+  },
+  "alarm": {
+    "count": 0,
+    "last": "none",
+    "muted": false,
+    "acknowledged": false
+  },
+  "config": {
+    "sample_interval_ms": 500,
+    "als_low_threshold": 80,
+    "ps_warning_threshold": 120,
+    "ps_alarm_threshold": 220,
+    "motion_warning_threshold": 8000,
+    "motion_alarm_threshold": 15000
+  },
+  "system": {
+    "uptime_sec": 900,
+    "ip": "192.168.10.2",
+    "sensor_hubd": "running"
+  }
 }

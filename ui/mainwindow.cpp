@@ -480,7 +480,7 @@ void MainWindow::initTouch()
     connect(m_touchNotifier, &QSocketNotifier::activated,
             this, &MainWindow::processTouchEvents);
 
-    qDebug("Touch device: %s", qPrintable(m_touchDevice));
+    qDebug("[touch] init OK: %s fd=%d", qPrintable(m_touchDevice), m_touchFd);
 }
 
 void MainWindow::handleTouchEnd()
@@ -490,23 +490,35 @@ void MainWindow::handleTouchEnd()
     int cur = m_stack ? m_stack->currentIndex() : 0;
     int cnt = m_stack ? m_stack->count() : 0;
 
+    qDebug("[touch] end  start=(%d,%d) cur=(%d,%d) dx=%d dy=%d  page=%d/%d",
+           m_touchStartX, m_touchStartY, m_touchCurX, m_touchCurY,
+           dx, dy, cur, cnt);
+
+    /* vertical swipe: up (dy<0) → next page, down (dy>0) → prev page */
     if (abs(dy) > kSwipeThreshold && abs(dx) < abs(dy)) {
-        if (dy > 0 && cur < cnt - 1)
+        qDebug("[touch] SWIPE dy=%d -> page %d", dy, dy < 0 ? cur+1 : cur-1);
+        if (dy < 0 && cur < cnt - 1)
             switchPage(cur + 1);
-        else if (dy < 0 && cur > 0)
+        else if (dy > 0 && cur > 0)
             switchPage(cur - 1);
         goto reset;
     }
 
-    if (abs(dx) <= kTapRadius && abs(dy) <= kTapRadius &&
-        m_touchStartX >= 0 && m_touchStartX < kSidebarWidth) {
-
-        int y = m_touchStartY;
-        if      (y >=  88 && y < 132) switchPage(0);
-        else if (y >= 140 && y < 184) switchPage(1);
-        else if (y >= 192 && y < 236) switchPage(2);
-        else if (y >= 244 && y < 288) switchPage(3);
-        else if (y >= 296 && y < 340) switchPage(4);
+    if (abs(dx) <= kTapRadius && abs(dy) <= kTapRadius) {
+        if (m_touchStartX >= 0 && m_touchStartX < kSidebarWidth) {
+            qDebug("[touch] TAP sidebar (%d,%d)", m_touchStartX, m_touchStartY);
+            /* dynamically match tap to a sidebar button by geometry */
+            for (int i = 0; i < m_navButtons.size(); ++i) {
+                QPoint gp = m_navButtons[i]->mapTo(this, QPoint(0, 0));
+                QRect r(gp, m_navButtons[i]->size());
+                if (r.contains(m_touchStartX, m_touchStartY)) {
+                    switchPage(i);
+                    break;
+                }
+            }
+        } else {
+            qDebug("[touch] TAP content area (%d,%d) ignored", m_touchStartX, m_touchStartY);
+        }
     }
 
 reset:
@@ -532,18 +544,23 @@ void MainWindow::processTouchEvents()
 
         switch (ev.type) {
         case EV_ABS:
+            /* always track current position, regardless of touch state */
             if (ev.code == ABS_MT_POSITION_X || ev.code == ABS_X) {
                 m_touchCurX = ev.value;
-                if (m_touchDown && m_touchStartX < 0)
-                    m_touchStartX = ev.value;
             } else if (ev.code == ABS_MT_POSITION_Y || ev.code == ABS_Y) {
                 m_touchCurY = ev.value;
-                if (m_touchDown && m_touchStartY < 0)
-                    m_touchStartY = ev.value;
             } else if (ev.code == ABS_MT_TRACKING_ID) {
+                qDebug("[touch] TRACKING_ID=%d  down=%d handled=%d",
+                       ev.value, (int)m_touchDown, (int)m_touchHandled);
                 if (ev.value >= 0 && !m_touchDown) {
                     m_touchDown = true;
                     m_touchHandled = false;
+                    /* snapshot current position as start — robust
+                       regardless of whether ABS_X/Y came before or after */
+                    m_touchStartX = m_touchCurX;
+                    m_touchStartY = m_touchCurY;
+                    qDebug("[touch] DOWN tracking_id start=(%d,%d)",
+                           m_touchStartX, m_touchStartY);
                 } else if (ev.value < 0 && m_touchDown && !m_touchHandled) {
                     m_touchDown = false;
                     handleTouchEnd();
@@ -553,9 +570,15 @@ void MainWindow::processTouchEvents()
             break;
         case EV_KEY:
             if (ev.code == BTN_TOUCH) {
+                qDebug("[touch] BTN_TOUCH=%d  down=%d handled=%d",
+                       ev.value, (int)m_touchDown, (int)m_touchHandled);
                 if (ev.value == 1 && !m_touchDown) {
                     m_touchDown = true;
                     m_touchHandled = false;
+                    m_touchStartX = m_touchCurX;
+                    m_touchStartY = m_touchCurY;
+                    qDebug("[touch] DOWN BTN_TOUCH start=(%d,%d)",
+                           m_touchStartX, m_touchStartY);
                 } else if (ev.value == 0 && m_touchDown && !m_touchHandled) {
                     m_touchDown = false;
                     handleTouchEnd();
@@ -728,8 +751,17 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
     m_ledLabel->setText(QString("%1 / %2")
                         .arg(valueToString(device, "led", "--"),
                              valueToString(device, "buzzer", "--")));
-    m_timeLabel->setText("Last update: " +
-                         QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    {
+        qint64 ts_ms = obj.value("timestamp_ms").toVariant().toLongLong();
+        if (ts_ms > 0) {
+            qint64 secs = ts_ms / 1000;
+            m_timeLabel->setText(QString("Data age: %1 s ago")
+                                 .arg(QDateTime::currentSecsSinceEpoch() - secs));
+        } else {
+            m_timeLabel->setText("Last update: " +
+                                 QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+        }
+    }
 
     /* ---- Sensors ---- */
     m_accelLabel->setText(QString("%1, %2, %3")
@@ -762,11 +794,24 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
     m_alarmCountLabel->setText(valueToString(alarm, "count", "0"));
     m_lastAlarmLabel->setText(valueToString(alarm, "last", "none"));
 
-    /* ---- Settings ---- */
-    /* Note: thresholds live in config now, not in status JSON.
-       We display them from status sample for demo, or show placeholders. */
-    m_intervalLabel->setText("500 ms (config)");
-    m_thresholdLabel->setText("See /etc/edgeguard/config.json");
+    /* ---- Settings — read from config block in status JSON ---- */
+    {
+        QJsonObject cfg = obj.value("config").toObject();
+        if (!cfg.isEmpty()) {
+            int iv = cfg.value("sample_interval_ms").toInt(500);
+            m_intervalLabel->setText(QString("%1 ms").arg(iv));
+            QString th;
+            th += QString("ALS low: %1  ").arg(cfg.value("als_low_threshold").toInt(80));
+            th += QString("PS warn: %1  ").arg(cfg.value("ps_warning_threshold").toInt(120));
+            th += QString("PS alarm: %1\n").arg(cfg.value("ps_alarm_threshold").toInt(220));
+            th += QString("Motion warn: %1  ").arg(cfg.value("motion_warning_threshold").toInt(8000));
+            th += QString("Motion alarm: %1").arg(cfg.value("motion_alarm_threshold").toInt(15000));
+            m_thresholdLabel->setText(th);
+        } else {
+            m_intervalLabel->setText("500 ms (default)");
+            m_thresholdLabel->setText("Waiting for sensor_hubd...");
+        }
+    }
 
     /* ---- System ---- */
     m_ipLabel->setText(valueToString(sys, "ip", "--"));
@@ -778,7 +823,14 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
             m_uptimeLabel->setText(valueToString(sys, "uptime_sec", "--"));
     }
     m_serviceLabel->setText(valueToString(sys, "sensor_hubd", "unknown"));
-    m_networkLabel->setText("eth0 up");
+    {
+        QFile nf("/sys/class/net/eth0/operstate");
+        if (nf.open(QIODevice::ReadOnly)) {
+            m_networkLabel->setText("eth0 " + QString::fromUtf8(nf.readAll()).trimmed());
+        } else {
+            m_networkLabel->setText("eth0 unknown");
+        }
+    }
 
     /* ---- Color-coding ---- */
     if (state.contains("FAULT")) {
@@ -796,7 +848,7 @@ QString MainWindow::valueToString(const QJsonObject &obj, const QString &key, co
 {
     const QJsonValue v = obj.value(key);
     if (v.isString())  return v.toString();
-    if (v.isDouble())  return QString::number(v.toInt());
+    if (v.isDouble())  return QString::number(v.toDouble(), 'f', 1);
     if (v.isBool())    return v.toBool() ? "true" : "false";
     return fallback;
 }

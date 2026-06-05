@@ -40,10 +40,10 @@ static char          g_cmd_path[256];
 static char          g_cmd_tmp_path[272];  /* g_cmd_path + ".tmp" */
 static pthread_mutex_t g_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* ---- auth settings ---- */
+/* ---- auth settings (can be overridden via CLI) ---- */
 #define AUTH_ENABLE 1
-#define AUTH_USER   "admin"
-#define AUTH_PASS   "edgeguard"
+static char g_auth_user[64] = "admin";
+static char g_auth_pass[64] = "edgeguard";
 
 /* ---- SSE broadcast state ---- */
 struct sse_client {
@@ -540,9 +540,9 @@ static void sse_broadcast(const char *data)
         struct sse_client *c = *p;
         size_t len = strlen(data);
         if (send(c->fd, data, len, MSG_NOSIGNAL) != (ssize_t)len) {
-            /* client gone, remove */
+            /* client gone — remove from list but DON'T close fd.
+               the handler thread owns the fd and will close it. */
             *p = c->next;
-            close(c->fd);
             free(c);
         } else {
             p = &(*p)->next;
@@ -555,32 +555,26 @@ static void *sse_broadcast_thread(void *arg)
 {
     (void)arg;
     while (g_sse_running) {
-        char buf[8192];
-        int n = read_file(g_status_path, buf, sizeof(buf));
-        if (n > 0 && buf[0] != '\0') {
-            /* compare with last sent */
-            if (strcmp(buf, g_sse_last_json) != 0) {
-                /* build SSE event */
-                char sse_msg[8500];
-                int body_len = snprintf(sse_msg, sizeof(sse_msg),
-                                        "data: %s\n\n", buf);
-                /* compact: replace \n with space for the SSE data line,
-                   SSE spec allows multi-line data via multiple data: lines.
-                   Simpler: use the JSON on a single line, or escape newlines. */
-                /* Rebuild properly: compact json to single line for SSE */
-                char compact[8192];
-                int wi = 0;
-                for (int i = 0; i < n && wi < (int)sizeof(compact) - 1; i++) {
-                    if (buf[i] != '\n' && buf[i] != '\r')
-                        compact[wi++] = buf[i];
+        /* skip file read if no SSE clients connected */
+        if (g_sse_clients != NULL) {
+            char buf[8192];
+            int n = read_file(g_status_path, buf, sizeof(buf));
+            if (n > 0 && buf[0] != '\0') {
+                if (strcmp(buf, g_sse_last_json) != 0) {
+                    /* compact JSON to single line for SSE data: field */
+                    char compact[8192];
+                    int wi = 0;
+                    for (int i = 0; i < n && wi < (int)sizeof(compact) - 1; i++) {
+                        if (buf[i] != '\n' && buf[i] != '\r')
+                            compact[wi++] = buf[i];
+                    }
+                    compact[wi] = '\0';
+                    char sse_msg[8500];
+                    snprintf(sse_msg, sizeof(sse_msg),
+                             "data: %s\n\n", compact);
+                    sse_broadcast(sse_msg);
+                    snprintf(g_sse_last_json, sizeof(g_sse_last_json), "%s", buf);
                 }
-                compact[wi] = '\0';
-                snprintf(sse_msg, sizeof(sse_msg),
-                         "data: %s\n\n", compact);
-                sse_broadcast(sse_msg);
-                /* save last sent */
-                snprintf(g_sse_last_json, sizeof(g_sse_last_json), "%s", buf);
-                (void)body_len; /* suppress unused warning if any */
             }
         }
         usleep(500000); /* 500ms */
@@ -589,6 +583,22 @@ static void *sse_broadcast_thread(void *arg)
 }
 
 /* ---- SQLite alarm query ---- */
+static void json_escape_str(const char *src, char *dst, size_t dst_size)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j + 2 < dst_size; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            if (j + 2 < dst_size) { dst[j++] = '\\'; dst[j++] = c; }
+        } else if (c < 0x20) {
+            /* skip control chars */
+        } else {
+            dst[j++] = c;
+        }
+    }
+    dst[j] = '\0';
+}
+
 static int build_alarms_json(char *out, size_t size, int limit)
 {
     sqlite3 *db = NULL;
@@ -629,6 +639,12 @@ static int build_alarms_json(char *out, size_t size, int limit)
         double tmp = sqlite3_column_double(stmt, 7);
         int ack = sqlite3_column_int(stmt, 8);
 
+        /* escape strings for safe JSON embedding */
+        char ets[64], est[32], erea[128];
+        json_escape_str(ts ? ts : "", ets, sizeof(ets));
+        json_escape_str(state ? state : "", est, sizeof(est));
+        json_escape_str(reason ? reason : "", erea, sizeof(erea));
+
         if (rem < 256) break;
         written = snprintf(pos, rem,
             "%s\n  {\"id\":%d,\"timestamp\":\"%s\",\"state\":\"%s\","
@@ -636,8 +652,7 @@ static int build_alarms_json(char *out, size_t size, int limit)
             "\"mpu_temp\":%.1f,\"acknowledged\":%d}",
             first ? "" : ",",
             sqlite3_column_int(stmt, 0),
-            ts ? ts : "", state ? state : "",
-            reason ? reason : "", md, ps, als, tmp, ack);
+            ets, est, erea, md, ps, als, tmp, ack);
         if (written < 0) written = 0;
         pos += written; rem -= (size_t)written;
         first = 0;
@@ -702,7 +717,7 @@ static void *connection_handler(void *arg)
             char decoded[128];
             if (base64_decode(auth_hdr, decoded, sizeof(decoded)) > 0) {
                 char expected[128];
-                snprintf(expected, sizeof(expected), "%s:%s", AUTH_USER, AUTH_PASS);
+                snprintf(expected, sizeof(expected), "%s:%s", g_auth_user, g_auth_pass);
                 if (!strcmp(decoded, expected))
                     authed = 1;
             }
@@ -888,6 +903,8 @@ int main(int argc, char *argv[])
                    DEFAULT_STATUS_PATH);
             printf("  --cmd <path>    command JSON path (default %s)\n",
                    DEFAULT_CMD_PATH);
+            printf("  --auth-user <u> basic auth user (default admin)\n");
+            printf("  --auth-pass <p> basic auth pass (default edgeguard)\n");
             printf("  -h, --help      this help\n");
             return 0;
         } else if (!strcmp(argv[i], "--port") && i + 1 < argc) {
@@ -897,6 +914,10 @@ int main(int argc, char *argv[])
             snprintf(g_status_path, sizeof(g_status_path), "%s", argv[++i]);
         } else if (!strcmp(argv[i], "--cmd") && i + 1 < argc) {
             snprintf(g_cmd_path, sizeof(g_cmd_path), "%s", argv[++i]);
+        } else if (!strcmp(argv[i], "--auth-user") && i + 1 < argc) {
+            snprintf(g_auth_user, sizeof(g_auth_user), "%s", argv[++i]);
+        } else if (!strcmp(argv[i], "--auth-pass") && i + 1 < argc) {
+            snprintf(g_auth_pass, sizeof(g_auth_pass), "%s", argv[++i]);
         } else {
             fprintf(stderr, "unknown option: %s\n", argv[i]);
             return 1;

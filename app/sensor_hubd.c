@@ -14,6 +14,10 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 #include <linux/input.h>
 #include "sqlite3.h"
 
@@ -49,6 +53,10 @@
 
 #define FAULT_THRESHOLD   3   /* consecutive failures before FAULT */
 #define BUZZER_BEEP_MS    200
+#define MIN_ALARM_DURATION_MS  2000  /* minimum time in WARNING/ALARM/FAULT before returning to NORMAL */
+#define MOTION_NOISE_FLOOR     30    /* ignore motion delta below this (MPU6050 resting noise ~12-24) */
+/* MPU6050 temperature: raw → Celsius (datasheet formula) */
+#define MPU_TEMP_TO_C(raw)     ((raw) / 340.0 + 36.53)
 
 /* ---- data structures ---- */
 struct mpu6050_data {
@@ -101,6 +109,7 @@ static int         g_last_led_toggle_ms   = 0;
 static int         g_last_beep_ms         = 0;
 
 static sqlite3    *g_db = NULL;
+static long long   g_non_normal_since_ms  = 0;  /* when we entered non-NORMAL, 0 = in NORMAL */
 
 /* ---- helpers ---- */
 static const char *state_to_string(enum alarm_state s)
@@ -231,16 +240,20 @@ static int parse_ap3216c(const char *raw, struct ap3216c_data *d)
 static int read_mpu6050(struct mpu6050_data *d)
 {
     char buf[BUF_SIZE];
-    if (read_text_device(MPU6050_DEV, buf, sizeof(buf)) < 0)
+    if (read_text_device(MPU6050_DEV, buf, sizeof(buf)) < 0) {
+        d->valid = 0;  /* mark offline so FAULT detection works */
         return -1;
+    }
     return parse_mpu6050(buf, d);
 }
 
 static int read_ap3216c(struct ap3216c_data *d)
 {
     char buf[BUF_SIZE];
-    if (read_text_device(AP3216C_DEV, buf, sizeof(buf)) < 0)
+    if (read_text_device(AP3216C_DEV, buf, sizeof(buf)) < 0) {
+        d->valid = 0;  /* mark offline so FAULT detection works */
         return -1;
+    }
     return parse_ap3216c(buf, d);
 }
 
@@ -255,6 +268,7 @@ static int calc_motion_delta(const struct mpu6050_data *cur,
     d += abs(cur->gx - prev->gx);
     d += abs(cur->gy - prev->gy);
     d += abs(cur->gz - prev->gz);
+    if (d < MOTION_NOISE_FLOOR) return 0;  /* filter resting noise */
     return d;
 }
 
@@ -341,7 +355,6 @@ static int load_config(struct app_config *cfg)
     size_t n = fread(buf, 1, sz, fp);
     fclose(fp);
     buf[n] = '\0';
-
     cfg->interval_ms          = json_get_int(buf, "sample_interval_ms",      cfg->interval_ms);
     cfg->als_low_th           = json_get_int(buf, "als_low_threshold",        cfg->als_low_th);
     cfg->ps_warning_th        = json_get_int(buf, "ps_warning_threshold",     cfg->ps_warning_th);
@@ -449,19 +462,20 @@ static void db_close(void)
 /* ---- JSON status writer ---- */
 static void get_network_info(char *ip_out, size_t ip_size)
 {
-    FILE *fp = popen(
-        "ip -4 addr show eth0 2>/dev/null | "
-        "awk '/inet /{print $2}' | cut -d/ -f1", "r");
-    if (fp) {
-        if (fgets(ip_out, (int)ip_size, fp)) {
-            size_t len = strlen(ip_out);
-            if (len > 0 && ip_out[len - 1] == '\n')
-                ip_out[len - 1] = '\0';
-        }
-        pclose(fp);
-    }
-    if (ip_out[0] == '\0')
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) { snprintf(ip_out, ip_size, "N/A"); return; }
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth0");
+    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
+        close(fd);
         snprintf(ip_out, ip_size, "N/A");
+        return;
+    }
+    struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+    const char *ip = inet_ntoa(addr->sin_addr);
+    snprintf(ip_out, ip_size, "%s", ip ? ip : "N/A");
+    close(fd);
 }
 
 static void write_status_json(const struct app_config *cfg,
@@ -487,7 +501,7 @@ static void write_status_json(const struct app_config *cfg,
     double uptime_s = read_uptime_sec();
 
     /* temperature: raw → Celsius (MPU6050 datasheet) */
-    double temp_c = mpu->valid ? (mpu->temp / 340.0 + 36.53) : 0.0;
+    double temp_c = mpu->valid ? MPU_TEMP_TO_C(mpu->temp) : 0.0;
 
     fprintf(fp,
         "{\n"
@@ -522,6 +536,14 @@ static void write_status_json(const struct app_config *cfg,
         "    \"muted\": %s,\n"
         "    \"acknowledged\": %s\n"
         "  },\n"
+        "  \"config\": {\n"
+        "    \"sample_interval_ms\": %d,\n"
+        "    \"als_low_threshold\": %d,\n"
+        "    \"ps_warning_threshold\": %d,\n"
+        "    \"ps_alarm_threshold\": %d,\n"
+        "    \"motion_warning_threshold\": %d,\n"
+        "    \"motion_alarm_threshold\": %d\n"
+        "  },\n"
         "  \"system\": {\n"
         "    \"uptime_sec\": %.0f,\n"
         "    \"ip\": \"%s\",\n"
@@ -551,6 +573,12 @@ static void write_status_json(const struct app_config *cfg,
         last_alarm_str,
         g_muted ? "true" : "false",
         g_acknowledged ? "true" : "false",
+        cfg->interval_ms,
+        cfg->als_low_th,
+        cfg->ps_warning_th,
+        cfg->ps_alarm_th,
+        cfg->motion_warning_th,
+        cfg->motion_alarm_th,
         uptime_s,
         ip);
 
@@ -599,6 +627,7 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         g_acknowledged = 1;
         g_muted = 1;
         *state = STATE_NORMAL;
+        g_non_normal_since_ms = 0;  /* allow immediate return to NORMAL */
         write_text_device(EDGE_LEDS_DEV, "green");
         write_text_device(EDGE_BUZZER_DEV, "off");
         snprintf(g_cur_led, sizeof(g_cur_led), "green");
@@ -610,6 +639,7 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         g_acknowledged = 0;
         g_muted = 0;
         *state = STATE_ALARM;
+        g_non_normal_since_ms = uptime_ms();  /* ensure alarm lasts MIN_ALARM_DURATION_MS */
         log_event(cfg, "INFO", "demo alarm triggered");
     }
 
@@ -909,13 +939,28 @@ int main(int argc, char *argv[])
                       msg);
             /* log to SQLite on state transitions */
             {
-                double t = mpu.valid ? (mpu.temp / 340.0 + 36.53) : 0.0;
+                double t = mpu.valid ? MPU_TEMP_TO_C(mpu.temp) : 0.0;
                 const char *reason = get_alarm_reason(state, motion_delta,
                     ap.ps, ap.als, mpu_ok, ap_ok);
                 db_log_alarm(state_to_string(state), reason,
                              motion_delta, ap.ps, ap.als, t,
                              (state == STATE_NORMAL) ? 1 : 0);
             }
+        }
+
+        /* minimum duration: prevent rapid toggling back to NORMAL */
+        if (state == STATE_NORMAL && last_state != STATE_NORMAL
+            && last_state >= 0) {
+            long long elapsed = now_ms - g_non_normal_since_ms;
+            if (elapsed < MIN_ALARM_DURATION_MS) {
+                state = last_state;  /* clamp — stay in alarm a bit longer */
+            }
+        }
+        if (state != STATE_NORMAL && last_state == STATE_NORMAL) {
+            g_non_normal_since_ms = now_ms;  /* record when we entered non-NORMAL */
+        }
+        if (state == STATE_NORMAL) {
+            g_non_normal_since_ms = 0;  /* reset */
         }
 
         /* LED / buzzer blink */
