@@ -6,7 +6,9 @@ TEMPLATE = app
 
 SOURCES += \
     main.cpp \
-    mainwindow.cpp
+    mainwindow.cpp \
+    loginpage.cpp
 
 HEADERS += \
-    mainwindow.h
+    mainwindow.h \
+    loginpage.h

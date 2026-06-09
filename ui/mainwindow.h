@@ -6,10 +6,12 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTimer>
-#include <QSocketNotifier>
 #include <QJsonObject>
 #include <QVector>
 #include <QPoint>
+#include <QMouseEvent>
+
+class LoginPage;
 
 class MainWindow : public QMainWindow
 {
@@ -20,18 +22,19 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private slots:
     void refreshStatus();
     void switchPage(int index);
-    void processTouchEvents();
     void onMuteClicked();
     void onAckClicked();
+    void onLoginSuccess();
+    void onDemoRequested();
 
 private:
-    void initTouch();
-    QString findTouchDevice();
-    void handleTouchEnd();
     void parseArguments();
     void buildUi();
     QWidget *buildSidebar();
@@ -92,14 +95,16 @@ private:
     QLabel *m_serviceLabel;
     QLabel *m_networkLabel;
 
-    // Touch input (raw evdev — do NOT modify)
-    int m_touchFd;
-    QSocketNotifier *m_touchNotifier;
-    QString m_touchDevice;
-    int m_touchCurX, m_touchCurY;
-    int m_touchStartX, m_touchStartY;
-    bool m_touchDown;
-    bool m_touchHandled;
+    // Login
+    LoginPage *m_loginPage;
+    QWidget *m_sidebar;
+    bool m_authenticated;
+
+    // Swipe (Qt mouse events)
+    QPoint m_pressPos;
+    bool   m_pressing;
+    bool   m_swiped;
+    static const int kSwipeThresh = 70;
 };
 
 #endif // MAINWINDOW_H

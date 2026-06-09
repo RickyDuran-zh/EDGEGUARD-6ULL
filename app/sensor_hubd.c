@@ -464,18 +464,26 @@ static void get_network_info(char *ip_out, size_t ip_size)
 {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) { snprintf(ip_out, ip_size, "N/A"); return; }
+
     struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth0");
-    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
-        close(fd);
-        snprintf(ip_out, ip_size, "N/A");
-        return;
+    const char *try_names[] = {"eth0", "eth1", "eth2", "eth3", NULL};
+    int found = 0;
+
+    for (int i = 0; try_names[i] != NULL; i++) {
+        memset(&ifr, 0, sizeof(ifr));
+        snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", try_names[i]);
+        if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) continue;
+        struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+        if (addr->sin_addr.s_addr == 0 || addr->sin_addr.s_addr == INADDR_NONE) continue;
+        const char *ip = inet_ntoa(addr->sin_addr);
+        if (ip && ip[0] != '0') {
+            snprintf(ip_out, ip_size, "%s", ip);
+            found = 1;
+            break;
+        }
     }
-    struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-    const char *ip = inet_ntoa(addr->sin_addr);
-    snprintf(ip_out, ip_size, "%s", ip ? ip : "N/A");
     close(fd);
+    if (!found) snprintf(ip_out, ip_size, "N/A");
 }
 
 static void write_status_json(const struct app_config *cfg,

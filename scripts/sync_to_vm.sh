@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ====== VM Login Info ======
 VM_USER="rickyduran"
-VM_HOST="192.168.3.222"
+VM_HOST="192.168.3.234"
 VM="${VM_USER}@${VM_HOST}"
 
 # ====== Local Project Info ======
@@ -51,7 +51,10 @@ tar \
   --exclude="modules.order" \
   -czf - . | ssh "$VM" "tar -xzf - -C '$REMOTE_PROJECT'"
 
-echo "=== Step 3: Sync DTS to kernel source ==="
+echo "=== Step 3: Fix line endings (CRLF → LF) for shell scripts ==="
+ssh "$VM" "cd '$REMOTE_PROJECT' && find scripts/ -name '*.sh' -o -name '*.service' | xargs -r sed -i 's/\r//' 2>/dev/null; echo 'done'"
+
+echo "=== Step 4: Sync DTS to kernel source ==="
 
 if [ -f "$LOCAL_DTS" ]; then
     echo "Local DTS found:"

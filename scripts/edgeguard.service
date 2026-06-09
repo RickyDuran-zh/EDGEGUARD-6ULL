@@ -7,7 +7,7 @@ Wants=multi-user.target
 [Service]
 Type=simple
 ExecStartPre=/usr/local/sbin/load_modules.sh
-ExecStart=/imx6ull/app/sensor_hubd --key /dev/input/event0
+ExecStart=/imx6ull/app/sensor_hubd --key /dev/input/event2
 Restart=always
 RestartSec=3
 User=root

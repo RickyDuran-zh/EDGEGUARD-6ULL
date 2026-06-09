@@ -1,22 +1,19 @@
 #include "mainwindow.h"
+#include "loginpage.h"
 
 #include <QApplication>
 #include <QBoxLayout>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFrame>
 #include <QGridLayout>
 #include <QJsonDocument>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QRandomGenerator>
 #include <QTextStream>
 #include <QDebug>
-
-#include <fcntl.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <linux/input.h>
 
 static const char *kBaseStyle = R"(
     QMainWindow { background: #07111f; }
@@ -85,8 +82,6 @@ static const char *kBaseStyle = R"(
     }
 )";
 
-static const int kSwipeThreshold = 70;
-static const int kTapRadius       = 20;
 static const int kSidebarWidth    = 166;
 static const int kMaxFailures     = 3;
 static const char *kCmdTmpPath    = "/tmp/edgeguard_cmd.json.tmp";
@@ -126,18 +121,21 @@ MainWindow::MainWindow(QWidget *parent)
       m_uptimeLabel(nullptr),
       m_serviceLabel(nullptr),
       m_networkLabel(nullptr),
-      m_touchFd(-1),
-      m_touchNotifier(nullptr),
-      m_touchCurX(-1),
-      m_touchCurY(-1),
-      m_touchStartX(-1),
-      m_touchStartY(-1),
-      m_touchDown(false),
-      m_touchHandled(false)
+      m_loginPage(nullptr),
+      m_sidebar(nullptr),
+      m_authenticated(false),
+      m_pressing(false),
+      m_swiped(false)
 {
     parseArguments();
     buildUi();
-    initTouch();
+
+    if (m_loginPage) {
+        connect(m_loginPage, &LoginPage::loginSuccess, this, &MainWindow::onLoginSuccess);
+        connect(m_loginPage, &LoginPage::demoRequested, this, &MainWindow::onDemoRequested);
+    }
+    if (m_demoMode)
+        onDemoRequested();
 
     connect(m_timer, &QTimer::timeout, this, &MainWindow::refreshStatus);
     m_timer->start(500);
@@ -152,8 +150,6 @@ void MainWindow::parseArguments()
             m_demoMode = true;
         } else if (args[i] == "--status" && i + 1 < args.size()) {
             m_statusPath = args[++i];
-        } else if (args[i] == "--touch" && i + 1 < args.size()) {
-            m_touchDevice = args[++i];
         } else if (args[i] == "--page" && i + 1 < args.size()) {
             // Applied after UI creation in buildUi().
         }
@@ -170,19 +166,22 @@ void MainWindow::buildUi()
     mainLayout->setContentsMargins(12, 12, 12, 12);
     mainLayout->setSpacing(12);
 
-    QWidget *sidebar = buildSidebar();
-    mainLayout->addWidget(sidebar, 0);
+    m_sidebar = buildSidebar();
+    m_sidebar->setFixedWidth(0);  // collapsed on login
+    mainLayout->addWidget(m_sidebar, 0);
 
     m_stack = new QStackedWidget(root);
-    m_stack->addWidget(buildDashboardPage());
-    m_stack->addWidget(buildSensorPage());
-    m_stack->addWidget(buildAlarmPage());
-    m_stack->addWidget(buildSettingsPage());
-    m_stack->addWidget(buildSystemPage());
+    m_loginPage = new LoginPage(root);
+    m_stack->addWidget(m_loginPage);         // 0: Login
+    m_stack->addWidget(buildDashboardPage());// 1: Dashboard
+    m_stack->addWidget(buildSensorPage());   // 2: Sensors
+    m_stack->addWidget(buildAlarmPage());    // 3: Alarms
+    m_stack->addWidget(buildSettingsPage()); // 4: Settings
+    m_stack->addWidget(buildSystemPage());   // 5: System
     mainLayout->addWidget(m_stack, 1);
 
     setCentralWidget(root);
-    switchPage(0);
+    switchPage(0);  // start on login
 
     const QStringList args = QApplication::arguments();
     int pageIndex = -1;
@@ -192,8 +191,8 @@ void MainWindow::buildUi()
             break;
         }
     }
-    if (pageIndex >= 0 && pageIndex < m_stack->count())
-        switchPage(pageIndex);
+    if (pageIndex >= 0 && pageIndex + 1 < m_stack->count())
+        switchPage(pageIndex + 1);  // 0→1(Dashboard) etc
 }
 
 QWidget *MainWindow::buildSidebar()
@@ -219,15 +218,26 @@ QWidget *MainWindow::buildSidebar()
         QPushButton *btn = new QPushButton(names[i], side);
         btn->setObjectName("NavButton");
         btn->setCheckable(true);
+        btn->setFocusPolicy(Qt::NoFocus);
         btn->setMinimumHeight(44);
-        connect(btn, &QPushButton::clicked, this, [this, i]() { switchPage(i); });
+        connect(btn, &QPushButton::clicked, this, [this, i]() { switchPage(i + 1); });
         layout->addWidget(btn);
         m_navButtons.push_back(btn);
     }
 
     layout->addStretch(1);
-    QLabel *hint = makeSmallText("Swipe or tap\nsidebar to\nswitch pages.");
-    layout->addWidget(hint);
+
+    QPushButton *logoutBtn = new QPushButton("Logout", side);
+    logoutBtn->setObjectName("NavButton");
+    logoutBtn->setFocusPolicy(Qt::NoFocus);
+    logoutBtn->setMinimumHeight(44);
+    logoutBtn->setStyleSheet("QPushButton#NavButton { color: #ff5c5c; } QPushButton#NavButton:pressed { background: #2b80ff; color: #ffffff; }");
+    connect(logoutBtn, &QPushButton::clicked, this, [this]() {
+        m_authenticated = false;
+        if (m_loginPage) m_loginPage->reset();
+        switchPage(0);
+    });
+    layout->addWidget(logoutBtn);
 
     return side;
 }
@@ -311,12 +321,14 @@ QWidget *MainWindow::buildAlarmPage()
 
     m_muteBtn = new QPushButton("Mute Buzzer", page);
     m_muteBtn->setObjectName("ActionButton");
+    m_muteBtn->setFocusPolicy(Qt::NoFocus);
     m_muteBtn->setMinimumHeight(42);
     connect(m_muteBtn, &QPushButton::clicked, this, &MainWindow::onMuteClicked);
     btnRow->addWidget(m_muteBtn);
 
     m_ackBtn = new QPushButton("Acknowledge", page);
     m_ackBtn->setObjectName("ActionButton");
+    m_ackBtn->setFocusPolicy(Qt::NoFocus);
     m_ackBtn->setMinimumHeight(42);
     connect(m_ackBtn, &QPushButton::clicked, this, &MainWindow::onAckClicked);
     btnRow->addWidget(m_ackBtn);
@@ -401,193 +413,92 @@ void MainWindow::switchPage(int index)
 {
     if (!m_stack || index < 0 || index >= m_stack->count())
         return;
+    // auth gate: block navigation away from login
+    if (!m_authenticated && index > 0 && !m_demoMode)
+        return;
+    if (m_stack->currentIndex() == index) return;
+
+    // sidebar: collapsed on login, visible on dashboard+
+    if (m_sidebar)
+        m_sidebar->setFixedWidth(index == 0 ? 0 : kSidebarWidth);
+
     m_stack->setCurrentIndex(index);
     updateNavStyle();
 }
 
 void MainWindow::updateNavStyle()
 {
+    int visual = m_stack->currentIndex() - 1;  // page 1→nav 0, page 2→nav 1, etc
     for (int i = 0; i < m_navButtons.size(); ++i)
-        m_navButtons[i]->setChecked(i == m_stack->currentIndex());
+        m_navButtons[i]->setChecked(i == visual);
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
-    case Qt::Key_1: switchPage(0); break;
-    case Qt::Key_2: switchPage(1); break;
-    case Qt::Key_3: switchPage(2); break;
-    case Qt::Key_4: switchPage(3); break;
-    case Qt::Key_5: switchPage(4); break;
+    case Qt::Key_1: switchPage(1); break;  // Dashboard
+    case Qt::Key_2: switchPage(2); break;  // Sensors
+    case Qt::Key_3: switchPage(3); break;  // Alarms
+    case Qt::Key_4: switchPage(4); break;  // Settings
+    case Qt::Key_5: switchPage(5); break;  // System
     case Qt::Key_Escape: close(); break;
     default: QMainWindow::keyPressEvent(event); break;
     }
 }
 
-/* ---- Touch / Swipe (raw evdev — UNCHANGED) ---- */
-
-QString MainWindow::findTouchDevice()
+/* ---- Login slots ---- */
+void MainWindow::onLoginSuccess()
 {
-    QFile file("/proc/bus/input/devices");
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-        return QString();
-
-    bool inTarget = false;
-    while (!file.atEnd()) {
-        const QByteArray line = file.readLine();
-
-        if (line.startsWith("N:") && line.contains("Name=")) {
-            const QByteArray lower = line.toLower();
-            inTarget = lower.contains("goodix") ||
-                       lower.contains("gt9157") ||
-                       lower.contains("gt911");
-        }
-
-        if (inTarget && line.startsWith("H:") && line.contains("Handlers=")) {
-            int idx = line.indexOf("event");
-            if (idx >= 0) {
-                bool ok = false;
-                int num = line.mid(idx + 5).toInt(&ok);
-                if (ok && num >= 0) {
-                    file.close();
-                    return QString("/dev/input/event%1").arg(num);
-                }
-            }
-        }
-    }
-
-    return QString();
+    m_authenticated = true;
+    switchPage(1);
 }
 
-void MainWindow::initTouch()
+void MainWindow::onDemoRequested()
 {
-    if (m_touchDevice.isEmpty())
-        m_touchDevice = findTouchDevice();
+    m_demoMode = true;
+    m_authenticated = true;
+    switchPage(1);
+}
 
-    if (m_touchDevice.isEmpty()) {
-        qWarning("No touch device found, touch disabled");
+/* ---- Swipe via Qt mouse events ---- */
+
+void MainWindow::mousePressEvent(QMouseEvent *event)
+{
+    m_pressPos = event->pos();
+    m_pressing = true;
+    m_swiped = false;
+    QMainWindow::mousePressEvent(event);
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_pressing || m_swiped) {
+        QMainWindow::mouseMoveEvent(event);
         return;
     }
 
-    m_touchFd = ::open(m_touchDevice.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
-    if (m_touchFd < 0) {
-        qWarning("Failed to open %s: %s",
-                 qPrintable(m_touchDevice), strerror(errno));
-        return;
-    }
+    int dx = event->pos().x() - m_pressPos.x();
+    int dy = event->pos().y() - m_pressPos.y();
 
-    m_touchNotifier = new QSocketNotifier(m_touchFd, QSocketNotifier::Read, this);
-    connect(m_touchNotifier, &QSocketNotifier::activated,
-            this, &MainWindow::processTouchEvents);
-
-    qDebug("[touch] init OK: %s fd=%d", qPrintable(m_touchDevice), m_touchFd);
-}
-
-void MainWindow::handleTouchEnd()
-{
-    int dx = m_touchCurX - m_touchStartX;
-    int dy = m_touchCurY - m_touchStartY;
-    int cur = m_stack ? m_stack->currentIndex() : 0;
-    int cnt = m_stack ? m_stack->count() : 0;
-
-    qDebug("[touch] end  start=(%d,%d) cur=(%d,%d) dx=%d dy=%d  page=%d/%d",
-           m_touchStartX, m_touchStartY, m_touchCurX, m_touchCurY,
-           dx, dy, cur, cnt);
-
-    /* vertical swipe: up (dy<0) → next page, down (dy>0) → prev page */
-    if (abs(dy) > kSwipeThreshold && abs(dx) < abs(dy)) {
-        qDebug("[touch] SWIPE dy=%d -> page %d", dy, dy < 0 ? cur+1 : cur-1);
+    // swipe UP (dy < 0) → next page; swipe DOWN (dy > 0) → prev page
+    if (abs(dy) > kSwipeThresh && abs(dx) < abs(dy)) {
+        m_swiped = true;
+        int cur = m_stack ? m_stack->currentIndex() : 0;
+        int cnt = m_stack ? m_stack->count() : 0;
+        qDebug("[swipe] dy=%d page=%d/%d", dy, cur, cnt);
         if (dy < 0 && cur < cnt - 1)
             switchPage(cur + 1);
-        else if (dy > 0 && cur > 0)
+        else if (dy > 0 && cur > 1)           // never swipe back to login (page 0)
             switchPage(cur - 1);
-        goto reset;
     }
 
-    if (abs(dx) <= kTapRadius && abs(dy) <= kTapRadius) {
-        if (m_touchStartX >= 0 && m_touchStartX < kSidebarWidth) {
-            qDebug("[touch] TAP sidebar (%d,%d)", m_touchStartX, m_touchStartY);
-            /* dynamically match tap to a sidebar button by geometry */
-            for (int i = 0; i < m_navButtons.size(); ++i) {
-                QPoint gp = m_navButtons[i]->mapTo(this, QPoint(0, 0));
-                QRect r(gp, m_navButtons[i]->size());
-                if (r.contains(m_touchStartX, m_touchStartY)) {
-                    switchPage(i);
-                    break;
-                }
-            }
-        } else {
-            qDebug("[touch] TAP content area (%d,%d) ignored", m_touchStartX, m_touchStartY);
-        }
-    }
-
-reset:
-    m_touchStartX = -1;
-    m_touchStartY = -1;
+    QMainWindow::mouseMoveEvent(event);
 }
 
-void MainWindow::processTouchEvents()
+void MainWindow::mouseReleaseEvent(QMouseEvent *event)
 {
-    struct input_event ev;
-    ssize_t n;
-
-    while (true) {
-        n = ::read(m_touchFd, &ev, sizeof(ev));
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                break;
-            qWarning("Error reading touch device: %s", strerror(errno));
-            return;
-        }
-        if (n != (ssize_t)sizeof(ev))
-            break;
-
-        switch (ev.type) {
-        case EV_ABS:
-            /* always track current position, regardless of touch state */
-            if (ev.code == ABS_MT_POSITION_X || ev.code == ABS_X) {
-                m_touchCurX = ev.value;
-            } else if (ev.code == ABS_MT_POSITION_Y || ev.code == ABS_Y) {
-                m_touchCurY = ev.value;
-            } else if (ev.code == ABS_MT_TRACKING_ID) {
-                qDebug("[touch] TRACKING_ID=%d  down=%d handled=%d",
-                       ev.value, (int)m_touchDown, (int)m_touchHandled);
-                if (ev.value >= 0 && !m_touchDown) {
-                    m_touchDown = true;
-                    m_touchHandled = false;
-                    /* snapshot current position as start — robust
-                       regardless of whether ABS_X/Y came before or after */
-                    m_touchStartX = m_touchCurX;
-                    m_touchStartY = m_touchCurY;
-                    qDebug("[touch] DOWN tracking_id start=(%d,%d)",
-                           m_touchStartX, m_touchStartY);
-                } else if (ev.value < 0 && m_touchDown && !m_touchHandled) {
-                    m_touchDown = false;
-                    handleTouchEnd();
-                    m_touchHandled = true;
-                }
-            }
-            break;
-        case EV_KEY:
-            if (ev.code == BTN_TOUCH) {
-                qDebug("[touch] BTN_TOUCH=%d  down=%d handled=%d",
-                       ev.value, (int)m_touchDown, (int)m_touchHandled);
-                if (ev.value == 1 && !m_touchDown) {
-                    m_touchDown = true;
-                    m_touchHandled = false;
-                    m_touchStartX = m_touchCurX;
-                    m_touchStartY = m_touchCurY;
-                    qDebug("[touch] DOWN BTN_TOUCH start=(%d,%d)",
-                           m_touchStartX, m_touchStartY);
-                } else if (ev.value == 0 && m_touchDown && !m_touchHandled) {
-                    m_touchDown = false;
-                    handleTouchEnd();
-                    m_touchHandled = true;
-                }
-            }
-            break;
-        }
-    }
+    m_pressing = false;
+    QMainWindow::mouseReleaseEvent(event);
 }
 
 /* ---- Command channel ---- */

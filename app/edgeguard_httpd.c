@@ -61,7 +61,7 @@ static void handle_signal(int sig)
     g_running = 0;
 }
 
-/* ---- get eth0 IPv4 address via ioctl ---- */
+/* ---- auto-detect eth* IPv4 address via ioctl ---- */
 static void get_eth0_ip(char *out, size_t size)
 {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -71,19 +71,24 @@ static void get_eth0_ip(char *out, size_t size)
     }
 
     struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth0");
+    const char *try_names[] = {"eth0", "eth1", "eth2", "eth3", NULL};
+    int found = 0;
 
-    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
-        close(fd);
-        snprintf(out, size, "0.0.0.0");
-        return;
+    for (int i = 0; try_names[i] != NULL; i++) {
+        memset(&ifr, 0, sizeof(ifr));
+        snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", try_names[i]);
+        if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) continue;
+        struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+        if (addr->sin_addr.s_addr == 0 || addr->sin_addr.s_addr == INADDR_NONE) continue;
+        const char *ip = inet_ntoa(addr->sin_addr);
+        if (ip && ip[0] != '0') {
+            snprintf(out, size, "%s", ip);
+            found = 1;
+            break;
+        }
     }
-
-    struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-    const char *ip = inet_ntoa(addr->sin_addr);
-    snprintf(out, size, "%s", ip ? ip : "0.0.0.0");
     close(fd);
+    if (!found) snprintf(out, size, "0.0.0.0");
 }
 
 /* ---- read entire file into a stack buffer ---- */
