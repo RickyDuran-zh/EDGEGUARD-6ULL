@@ -1,0 +1,15 @@
+[Unit]
+Description=EdgeGuard Vision Daemon (USB Camera)
+After=multi-user.target
+Wants=edgeguard.service
+
+[Service]
+Type=simple
+ExecStart=/imx6ull/app/edgeguard_visiond --device /dev/video0 --width 640 --height 480 --interval 2000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

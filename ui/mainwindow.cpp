@@ -121,6 +121,11 @@ MainWindow::MainWindow(QWidget *parent)
       m_uptimeLabel(nullptr),
       m_serviceLabel(nullptr),
       m_networkLabel(nullptr),
+      m_camOnlineLabel(nullptr),
+      m_camMotionLabel(nullptr),
+      m_camFacesLabel(nullptr),
+      m_camSnapshotLabel(nullptr),
+      m_camInferenceLabel(nullptr),
       m_loginPage(nullptr),
       m_sidebar(nullptr),
       m_authenticated(false),
@@ -178,6 +183,7 @@ void MainWindow::buildUi()
     m_stack->addWidget(buildAlarmPage());    // 3: Alarms
     m_stack->addWidget(buildSettingsPage()); // 4: Settings
     m_stack->addWidget(buildSystemPage());   // 5: System
+    m_stack->addWidget(buildVisionPage());   // 6: Vision
     mainLayout->addWidget(m_stack, 1);
 
     setCentralWidget(root);
@@ -213,7 +219,7 @@ QWidget *MainWindow::buildSidebar()
     layout->addWidget(sub);
     layout->addSpacing(14);
 
-    const QStringList names = {"1  Dashboard", "2  Sensors", "3  Alarms", "4  Settings", "5  System"};
+    const QStringList names = {"1  Dashboard", "2  Sensors", "3  Alarms", "4  Settings", "5  System", "6  Vision"};
     for (int i = 0; i < names.size(); ++i) {
         QPushButton *btn = new QPushButton(names[i], side);
         btn->setObjectName("NavButton");
@@ -371,6 +377,32 @@ QWidget *MainWindow::buildSystemPage()
     return page;
 }
 
+QWidget *MainWindow::buildVisionPage()
+{
+    QWidget *page = new QWidget(this);
+    QVBoxLayout *layout = new QVBoxLayout(page);
+    layout->setSpacing(12);
+    layout->addWidget(makeTitle("Camera Vision"));
+
+    QGridLayout *grid = new QGridLayout();
+    grid->setSpacing(12);
+    grid->addWidget(makeCard("Camera",      &m_camOnlineLabel,    "OFFLINE"), 0, 0);
+    grid->addWidget(makeCard("Motion",      &m_camMotionLabel,    "--"),      0, 1);
+    grid->addWidget(makeCard("Face Count",  &m_camFacesLabel,     "0"),       1, 0);
+    grid->addWidget(makeCard("Inference",   &m_camInferenceLabel, "--"),      1, 1);
+    {
+        QWidget *snapCard = makeCard("Latest Snapshot", &m_camSnapshotLabel, "--");
+        grid->addWidget(snapCard, 2, 0, 1, 2);
+    }
+    layout->addLayout(grid, 1);
+
+    /* Snapshot preview hint */
+    m_camSnapshotLabel->setWordWrap(true);
+    m_camSnapshotLabel->setStyleSheet("color: #8fb3d9; font-size: 13px;");
+
+    return page;
+}
+
 QWidget *MainWindow::makeCard(const QString &title, QLabel **valueLabel, const QString &initial)
 {
     QFrame *card = new QFrame(this);
@@ -441,6 +473,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_3: switchPage(3); break;  // Alarms
     case Qt::Key_4: switchPage(4); break;  // Settings
     case Qt::Key_5: switchPage(5); break;  // System
+    case Qt::Key_6: switchPage(6); break;  // Vision
     case Qt::Key_Escape: close(); break;
     default: QMainWindow::keyPressEvent(event); break;
     }
@@ -613,8 +646,17 @@ QJsonObject MainWindow::makeDemoStatus()
     obj["state"] = state;
     obj["alarm_reason"] = reason;
     obj["timestamp_ms"] = (double)(m_demoCounter * 500);
+    /* Vision demo data */
+    QJsonObject vision;
+    vision["camera_online"] = true;
+    vision["motion_detected"] = (phase > 26);
+    vision["face_count"] = (phase > 27) ? 1 : 0;
+    vision["inference_ms"] = 45;
+    vision["snapshot_path"] = "/var/log/edgeguard/snapshots/demo.jpg";
+
     obj["mpu6050"] = mpu;
     obj["ap3216c"] = ap3216;
+    obj["vision"] = vision;
     obj["device"] = device;
     obj["alarm"] = alarm;
     obj["system"] = sys;
@@ -740,6 +782,31 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
             m_networkLabel->setText("eth0 " + QString::fromUtf8(nf.readAll()).trimmed());
         } else {
             m_networkLabel->setText("eth0 unknown");
+        }
+    }
+
+    /* ---- Vision ---- */
+    {
+        QJsonObject vision = obj.value("vision").toObject();
+        if (m_camOnlineLabel) {
+            bool online = vision.value("camera_online").toBool();
+            m_camOnlineLabel->setText(online ? "ONLINE" : "OFFLINE");
+            m_camOnlineLabel->setStyleSheet(
+                online ? "color: #4ade80; font-size: 26px; font-weight: 700;"
+                       : "color: #ff5c5c; font-size: 26px; font-weight: 700;");
+        }
+        if (m_camMotionLabel)
+            m_camMotionLabel->setText(vision.value("motion_detected").toBool()
+                                       ? "YES" : "no");
+        if (m_camFacesLabel)
+            m_camFacesLabel->setText(QString::number(vision.value("face_count").toInt()));
+        if (m_camInferenceLabel) {
+            int ms = vision.value("inference_ms").toInt(0);
+            m_camInferenceLabel->setText(ms > 0 ? QString("%1 ms").arg(ms) : "--");
+        }
+        if (m_camSnapshotLabel) {
+            QString sp = vision.value("snapshot_path").toString();
+            m_camSnapshotLabel->setText(sp.isEmpty() || sp == "null" ? "--" : sp);
         }
     }
 

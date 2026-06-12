@@ -43,6 +43,7 @@ private:
     QWidget *buildAlarmPage();
     QWidget *buildSettingsPage();
     QWidget *buildSystemPage();
+    QWidget *buildVisionPage();
     QWidget *makeCard(const QString &title, QLabel **valueLabel, const QString &initial = "--");
     QLabel *makeTitle(const QString &text);
     QLabel *makeSmallText(const QString &text);
@@ -94,6 +95,13 @@ private:
     QLabel *m_uptimeLabel;
     QLabel *m_serviceLabel;
     QLabel *m_networkLabel;
+
+    // Vision
+    QLabel *m_camOnlineLabel;
+    QLabel *m_camMotionLabel;
+    QLabel *m_camFacesLabel;
+    QLabel *m_camSnapshotLabel;
+    QLabel *m_camInferenceLabel;
 
     // Login
     LoginPage *m_loginPage;

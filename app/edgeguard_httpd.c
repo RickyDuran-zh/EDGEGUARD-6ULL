@@ -29,7 +29,7 @@
 #define MAX_CONNECTIONS     10
 #define MAX_SSE_CLIENTS     8
 #define REQ_BUF_SIZE        4096
-#define RESP_BUF_SIZE       16384
+#define RESP_BUF_SIZE       32768
 #define RECV_TIMEOUT_SEC    2
 
 /* ---- global config ---- */
@@ -251,7 +251,7 @@ static int base64_decode(const char *in, char *out, size_t out_size)
     return (int)out_pos;
 }
 
-/* ---- embedded HTML dashboard ---- */
+/* ---- embedded HTML dashboard (multi-page SPA) ---- */
 static const char *get_dashboard_html(void)
 {
     return
@@ -260,168 +260,421 @@ static const char *get_dashboard_html(void)
 "<head>\n"
 "<meta charset=\"UTF-8\">\n"
 "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-"<title>EdgeGuard Remote Dashboard</title>\n"
+"<title>RickyDuran-EdgeGuard</title>\n"
 "<style>\n"
 "*{margin:0;padding:0;box-sizing:border-box}\n"
+":root{--bg:#0a0e14;--bg2:#12171f;--bg3:#1a2030;--border:#1e2a3a;"
+"--accent:#4f8cff;--accent2:#ff6b6b;--green:#3fb950;--yellow:#d29922;--red:#f85149;"
+"--text:#c9d1d9;--text2:#8b949e;--white:#f0f6fc;--gold:#f0c060}\n"
 "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
-"background:linear-gradient(135deg,#0d1117 0%,#161b22 100%);"
-"color:#c9d1d9;min-height:100vh}\n"
-".header{background:linear-gradient(90deg,#0d419d,#1a1a2e);padding:20px 24px;"
-"display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}\n"
-".header h1{font-size:20px;color:#fff;margin:0}\n"
-".header-info{display:flex;align-items:center;gap:12px;font-size:12px;color:#8b949e}\n"
-".conn-dot{width:8px;height:8px;border-radius:50%;display:inline-block}\n"
-".conn-live{background:#3fb950;box-shadow:0 0 6px #3fb950}\n"
-".conn-lost{background:#f85149;box-shadow:0 0 6px #f85149}\n"
-".container{max-width:760px;margin:0 auto;padding:20px}\n"
-".status-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}\n"
-".state-badge{display:inline-block;padding:8px 20px;border-radius:6px;"
-"font-weight:700;font-size:20px;letter-spacing:.5px}\n"
-".state-NORMAL{background:#1a3a1a;color:#3fb950;box-shadow:0 0 12px rgba(63,185,80,.3)}\n"
-".state-WARNING{background:#3a2e00;color:#d29922;box-shadow:0 0 12px rgba(210,153,34,.3)}\n"
-".state-ALARM{background:#490202;color:#f85149;box-shadow:0 0 16px rgba(248,81,73,.5);"
-"animation:blink .5s infinite}\n"
-".state-FAULT{background:#3a1111;color:#f85149;box-shadow:0 0 12px rgba(248,81,73,.3)}\n"
-".state-WAITING{background:#1a1a2e;color:#8b949e}\n"
-"@keyframes blink{50%{opacity:.5;box-shadow:0 0 24px rgba(248,81,73,.8)}}\n"
-".reason{font-size:14px;color:#8b949e}\n"
-".grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}\n"
-"@media(max-width:520px){.grid2{grid-template-columns:1fr}}\n"
-".card{background:#161b22;border:1px solid #21262d;border-radius:8px;"
-"padding:14px 18px;transition:border-color .2s,box-shadow .2s}\n"
-".card:hover{border-color:#30363d;box-shadow:0 4px 12px rgba(0,0,0,.3)}\n"
-".card h2{font-size:13px;color:#58a6ff;margin-bottom:10px;text-transform:uppercase;"
-"letter-spacing:.5px}\n"
-".row{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:13px}\n"
-".row .val{color:#f0f6fc;font-weight:500}\n"
-".row .lbl{color:#8b949e}\n"
-".dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}\n"
-".dot-on{background:#3fb950;box-shadow:0 0 4px #3fb950}\n"
-".dot-off{background:#f85149;box-shadow:0 0 4px #f85149}\n"
-".actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}\n"
-".actions button{padding:11px 22px;border:none;border-radius:6px;"
-"font-size:14px;font-weight:600;cursor:pointer;color:#fff;"
-"transition:transform .1s,box-shadow .1s,opacity .2s}\n"
-".actions button:active{transform:scale(.96)}\n"
-".actions button:disabled{opacity:.5;cursor:not-allowed;transform:none}\n"
-".btn-mute{background:#d29922;box-shadow:0 2px 6px rgba(210,153,34,.3)}\n"
-".btn-mute:hover:not(:disabled){background:#e5a828}\n"
-".btn-ack{background:#238636;box-shadow:0 2px 6px rgba(35,134,54,.3)}\n"
-".btn-ack:hover:not(:disabled){background:#2ea043}\n"
-".btn-demo{background:#b8600f;box-shadow:0 2px 6px rgba(184,96,15,.3)}\n"
-".btn-demo:hover:not(:disabled){background:#d47015}\n"
-".footer{font-size:11px;color:#484f58;margin-top:20px;text-align:center}\n"
+"background:var(--bg);color:var(--text);min-height:100vh}\n"
+"body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;"
+"background:radial-gradient(ellipse at 20% 20%,rgba(79,140,255,.04) 0%,transparent 60%),"
+"radial-gradient(ellipse at 80% 80%,rgba(240,192,96,.03) 0%,transparent 60%);"
+"pointer-events:none;z-index:0}\n"
+
+/* ---- top bar ---- */
+".topbar{background:linear-gradient(90deg,#0d1a2d,#0a0e14);"
+"border-bottom:1px solid var(--border);padding:0 20px;height:52px;"
+"display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}\n"
+".logo{width:32px;height:32px;border-radius:8px;"
+"background:linear-gradient(135deg,var(--accent),#2b5fc0);"
+"display:flex;align-items:center;justify-content:center;font-size:18px;"
+"box-shadow:0 0 12px rgba(79,140,255,.35);flex-shrink:0}\n"
+".brand{font-size:15px;font-weight:700;color:var(--white);white-space:nowrap;"
+"letter-spacing:-.2px}\n"
+".brand em{font-style:normal;color:var(--accent)}\n"
+".tabs{display:flex;gap:2px;flex:1}\n"
+".tab{background:transparent;color:var(--text2);border:none;padding:8px 16px;"
+"border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;"
+"transition:background .15s,color .15s;white-space:nowrap}\n"
+".tab:hover{background:var(--bg3);color:var(--white)}\n"
+".tab.active{background:var(--blue);color:#fff}\n"
+".topbar-right{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--text2);white-space:nowrap}\n"
+".conn-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}\n"
+".conn-live{background:var(--green);box-shadow:0 0 5px var(--green)}\n"
+".conn-lost{background:var(--red);box-shadow:0 0 5px var(--red)}\n"
+
+/* ---- pages ---- */
+".page{display:none;padding:20px 24px}\n"
+".page.active{display:block}\n"
+
+/* ---- overview strip ---- */
+".overview-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}\n"
+".ov-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
+"padding:16px 20px;text-align:center}\n"
+".ov-card .ov-val{font-size:28px;font-weight:800;line-height:1.1}\n"
+".ov-card .ov-lbl{font-size:11px;color:var(--text2);margin-top:4px;text-transform:uppercase;letter-spacing:.5px}\n"
+".ov-card.state-NORMAL .ov-val{color:var(--green)}\n"
+".ov-card.state-WARNING .ov-val{color:var(--yellow)}\n"
+".ov-card.state-ALARM .ov-val{color:var(--red);animation:blink .5s infinite}\n"
+".ov-card.state-FAULT .ov-val{color:var(--red)}\n"
+"@keyframes blink{50%{opacity:.3}}\n"
+
+/* ---- cards ---- */
+".card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
+"padding:16px 20px;margin-bottom:12px}\n"
+".card h2{font-size:12px;color:var(--blue);margin-bottom:12px;"
+"text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px}\n"
+".dot{width:7px;height:7px;border-radius:50%;display:inline-block}\n"
+".dot-on{background:var(--green);box-shadow:0 0 4px var(--green)}\n"
+".dot-off{background:var(--red);box-shadow:0 0 4px var(--red)}\n"
+
+/* ---- sensor grid ---- */
+".sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}\n"
+".sensor-row{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;line-height:1.6}\n"
+".sensor-row .lbl{color:var(--text2);min-width:55px}\n"
+".sensor-row .val{color:var(--white);font-weight:500;font-variant-numeric:tabular-nums}\n"
+
+/* ---- device card ---- */
+".dev-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px 16px;"
+"font-size:13px;margin-bottom:14px}\n"
+".dev-grid .lbl{color:var(--text2)}\n"
+".dev-grid .val{color:var(--white);font-weight:600}\n"
+
+/* ---- buttons ---- */
+".btn-row{display:flex;gap:10px;flex-wrap:wrap}\n"
+".btn{padding:10px 20px;border:none;border-radius:6px;font-size:13px;font-weight:600;"
+"cursor:pointer;color:#fff;transition:transform .1s,opacity .2s}\n"
+".btn:active{transform:scale(.96)}\n"
+".btn:disabled{opacity:.45;cursor:not-allowed;transform:none}\n"
+".btn-mute{background:var(--yellow);color:#000}\n"
+".btn-mute.active{background:#5c4a0a;color:var(--yellow)}\n"
+".btn-ack{background:var(--green);color:#000}\n"
+".btn-ack.active{background:#0a3d14;color:var(--green)}\n"
+".btn-demo{background:#b8600f}\n"
+
+/* ---- alarm table ---- */
+".alarm-table{width:100%;border-collapse:collapse;font-size:13px}\n"
+".alarm-table th{text-align:left;padding:10px 12px;color:var(--text2);font-size:11px;"
+"text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}\n"
+".alarm-table td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}\n"
+".alarm-table tr:hover td{background:var(--bg3)}\n"
+".badge-sm{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}\n"
+".badge-ALARM{background:#490202;color:var(--red)}\n"
+".badge-WARNING{background:#3a2e00;color:var(--yellow)}\n"
+".badge-NORMAL{background:#1a3a1a;color:var(--green)}\n"
+".badge-FAULT{background:#3a1111;color:var(--red)}\n"
+
+/* ---- settings ---- */
+".cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}\n"
+".cfg-item{background:var(--bg3);border-radius:8px;padding:14px 16px;display:flex;"
+"justify-content:space-between;align-items:center}\n"
+".cfg-item .cfg-lbl{font-size:13px;color:var(--text2)}\n"
+".cfg-item .cfg-val{font-size:16px;font-weight:700;color:var(--white)}\n"
+
+/* ---- camera ---- */
+".cam-preview{text-align:center;margin-bottom:16px}\n"
+".cam-preview img{max-width:100%;max-height:360px;border-radius:8px;border:2px solid var(--border)}\n"
+".cam-placeholder{display:inline-block;padding:60px 80px;background:var(--bg3);"
+"border-radius:8px;color:var(--text2);font-size:14px}\n"
+".cam-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}\n"
+
+/* ---- refresh bar ---- */
+".refresh-bar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text2);"
+"margin-bottom:12px}\n"
+".refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}\n"
+
+/* ---- responsive ---- */
+"@media(max-width:900px){.overview-strip{grid-template-columns:repeat(2,1fr)}"
+".sensor-grid{grid-template-columns:1fr}}\n"
+"@media(max-width:520px){.overview-strip{grid-template-columns:1fr}"
+".topbar{padding:0 10px}.tab{padding:8px 10px;font-size:12px}"
+".page{padding:12px 10px}.brand{font-size:15px}"
+".topbar-right{gap:8px;font-size:11px}}\n"
 "</style>\n"
 "</head>\n"
 "<body>\n"
-"<div class=\"header\">\n"
-"<h1>EdgeGuard Remote Dashboard</h1>\n"
-"<div class=\"header-info\">"
-"<span id=\"conn_status\"><span class=\"conn-dot conn-live\"></span> LIVE</span>"
-"<span>IP: <strong id=\"hdr_ip\">--</strong></span>"
+
+/* ---- Top Nav Bar ---- */
+"<nav class=\"topbar\">\n"
+"<div class=\"logo\">🛡</div>\n"
+"<div class=\"brand\">RickyDuran<em>-EdgeGuard</em></div>\n"
+"<div class=\"tabs\">\n"
+"<button class=\"tab active\" data-page=\"dashboard\">仪表盘</button>\n"
+"<button class=\"tab\" data-page=\"alarms\">报警记录</button>\n"
+"<button class=\"tab\" data-page=\"camera\">摄像头</button>\n"
+"<button class=\"tab\" data-page=\"settings\">系统设置</button>\n"
 "</div>\n"
+"<div class=\"topbar-right\">\n"
+"<span id=\"conn_status\"><span class=\"conn-dot conn-live\"></span>在线</span>\n"
+"<span id=\"clock\">--:--:--</span>\n"
 "</div>\n"
-"<div class=\"container\">\n"
-"<div class=\"status-bar\">\n"
-"<div class=\"state-badge\" id=\"state_badge\">Connecting...</div>\n"
-"<div class=\"reason\" id=\"reason_line\"></div>\n"
+"</nav>\n"
+
+/* ======== Page: Dashboard ======== */
+"<div id=\"page-dashboard\" class=\"page active\">\n"
+
+/* status overview strip */
+"<div class=\"overview-strip\">\n"
+"<div class=\"ov-card\" id=\"ov_state\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">系统状态</div></div>\n"
+"<div class=\"ov-card\" id=\"ov_alarms\"><div class=\"ov-val\">0</div><div class=\"ov-lbl\">累计报警</div></div>\n"
+"<div class=\"ov-card\" id=\"ov_uptime\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">运行时长</div></div>\n"
+"<div class=\"ov-card\" id=\"ov_ip\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">板卡 IP</div></div>\n"
 "</div>\n"
-"<div class=\"grid2\">\n"
+
+/* sensor cards */
+"<div class=\"sensor-grid\">\n"
 "<div class=\"card\">\n"
-"<h2>MPU6050 <span class=\"dot\" id=\"mpu_dot\"></span></h2>\n"
-"<div class=\"row\">"
-"<span class=\"lbl\">Accel:</span><span class=\"val\" id=\"mpu_accel\">--</span>"
-"<span class=\"lbl\">Gyro:</span><span class=\"val\" id=\"mpu_gyro\">--</span>"
-"<span class=\"lbl\">Temp:</span><span class=\"val\" id=\"mpu_temp\">--</span>"
-"<span class=\"lbl\">Motion:</span><span class=\"val\" id=\"mpu_motion\">--</span>"
-"</div>\n"
-"</div>\n"
-"<div class=\"card\">\n"
-"<h2>AP3216C <span class=\"dot\" id=\"ap_dot\"></span></h2>\n"
-"<div class=\"row\">"
-"<span class=\"lbl\">IR:</span><span class=\"val\" id=\"ap_ir\">--</span>"
-"<span class=\"lbl\">ALS:</span><span class=\"val\" id=\"ap_als\">--</span>"
-"<span class=\"lbl\">PS:</span><span class=\"val\" id=\"ap_ps\">--</span>"
-"</div>\n"
-"</div>\n"
-"</div>\n"
-"<div class=\"card\">\n"
-"<h2>Device &amp; Alarm</h2>\n"
-"<div class=\"row\">"
-"<span class=\"lbl\">LED:</span><span class=\"val\" id=\"dev_led\">--</span>"
-"<span class=\"lbl\">Buzzer:</span><span class=\"val\" id=\"dev_buzzer\">--</span>"
-"<span class=\"lbl\">Alarms:</span><span class=\"val\" id=\"alarm_count\">0</span>"
-"<span class=\"lbl\">Muted:</span><span class=\"val\" id=\"alarm_muted\">--</span>"
-"<span class=\"lbl\">Acked:</span><span class=\"val\" id=\"alarm_acked\">--</span>"
+"<h2><span class=\"dot\" id=\"mpu_dot\"></span> MPU6050</h2>\n"
+"<div class=\"sensor-row\">"
+"<span class=\"lbl\">加速度</span><span class=\"val\" id=\"mpu_accel\">--</span>"
+"<span class=\"lbl\">陀螺仪</span><span class=\"val\" id=\"mpu_gyro\">--</span>"
+"<span class=\"lbl\">温度</span><span class=\"val\" id=\"mpu_temp\">--</span>"
+"<span class=\"lbl\">震动</span><span class=\"val\" id=\"mpu_motion\">--</span>"
 "</div>\n"
 "</div>\n"
 "<div class=\"card\">\n"
-"<h2>System</h2>\n"
-"<div class=\"row\">"
-"<span class=\"lbl\">Uptime:</span><span class=\"val\" id=\"sys_uptime\">--</span>"
-"<span class=\"lbl\">IP:</span><span class=\"val\" id=\"sys_ip\">--</span>"
+"<h2><span class=\"dot\" id=\"ap_dot\"></span> AP3216C</h2>\n"
+"<div class=\"sensor-row\">"
+"<span class=\"lbl\">红外</span><span class=\"val\" id=\"ap_ir\">--</span>"
+"<span class=\"lbl\">环境光</span><span class=\"val\" id=\"ap_als\">--</span>"
+"<span class=\"lbl\">接近</span><span class=\"val\" id=\"ap_ps\">--</span>"
 "</div>\n"
 "</div>\n"
-"<div class=\"actions\">\n"
-"<button class=\"btn-mute\" id=\"btn_mute\" onclick=\"sendCmd('mute_buzzer',this)\">Mute Buzzer</button>\n"
-"<button class=\"btn-ack\" id=\"btn_ack\" onclick=\"sendCmd('ack_alarm',this)\">ACK Alarm</button>\n"
-"<button class=\"btn-demo\" id=\"btn_demo\" onclick=\"sendCmd('demo_alarm',this)\">Demo Alarm</button>\n"
 "</div>\n"
-"<div class=\"footer\">EdgeGuard-6ULL &mdash; HTTP Remote Service</div>\n"
+
+/* device & control */
+"<div class=\"card\">\n"
+"<h2>设备控制</h2>\n"
+"<div class=\"dev-grid\">"
+"<div><span class=\"lbl\">LED</span> <span class=\"val\" id=\"dev_led\">--</span></div>"
+"<div><span class=\"lbl\">蜂鸣器</span> <span class=\"val\" id=\"dev_buzzer\">--</span></div>"
+"<div><span class=\"lbl\">已静音</span> <span class=\"val\" id=\"dev_muted\">--</span></div>"
+"<div><span class=\"lbl\">已确认</span> <span class=\"val\" id=\"dev_acked\">--</span></div>"
 "</div>\n"
+"<div class=\"btn-row\">\n"
+"<button class=\"btn btn-mute\" id=\"btn_mute\" onclick=\"sendCmd('mute_buzzer',this)\">🔇 静音</button>\n"
+"<button class=\"btn btn-ack\"  id=\"btn_ack\"  onclick=\"sendCmd('ack_alarm',this)\">✅ 确认报警</button>\n"
+"<button class=\"btn btn-demo\" id=\"btn_demo\" onclick=\"sendCmd('demo_alarm',this)\">🧪 测试报警</button>\n"
+"</div>\n"
+"</div>\n"
+
+/* recent alarms */
+"<div class=\"card\">\n"
+"<h2>最近报警 <span style=\"font-weight:400;color:var(--text2);margin-left:auto;cursor:pointer\" onclick=\"switchPage('alarms')\">查看全部 →</span></h2>\n"
+"<table class=\"alarm-table\">\n"
+"<thead><tr><th>时间</th><th>级别</th><th>原因</th><th>详情</th></tr></thead>\n"
+"<tbody id=\"recent_alarms_tbody\">\n"
+"<tr><td colspan=\"4\" style=\"text-align:center;color:var(--text2)\">加载中...</td></tr>\n"
+"</tbody>\n"
+"</table>\n"
+"</div>\n"
+
+"</div>\n" /* end dashboard */
+
+/* ======== Page: Alarms ======== */
+"<div id=\"page-alarms\" class=\"page\">\n"
+"<div class=\"card\">\n"
+"<h2>报警历史</h2>\n"
+"<table class=\"alarm-table\">\n"
+"<thead><tr><th>时间</th><th>级别</th><th>原因</th><th>震动</th><th>接近</th><th>环境光</th><th>温度</th></tr></thead>\n"
+"<tbody id=\"alarms_tbody\">\n"
+"<tr><td colspan=\"7\" style=\"text-align:center;color:var(--text2);padding:40px\">加载中...</td></tr>\n"
+"</tbody>\n"
+"</table>\n"
+"</div>\n"
+"</div>\n"
+
+/* ======== Page: Camera ======== */
+"<div id=\"page-camera\" class=\"page\">\n"
+"<div class=\"card\">\n"
+"<h2>实时快照</h2>\n"
+"<div class=\"cam-preview\" id=\"cam_preview\">\n"
+"<span class=\"cam-placeholder\">摄像头离线或未连接</span>\n"
+"</div>\n"
+"<div style=\"text-align:center;margin-bottom:12px\">\n"
+"<span style=\"font-size:12px;color:var(--text2)\" id=\"cam_update_hint\"></span>\n"
+"</div>\n"
+"</div>\n"
+"<div class=\"cam-info\">\n"
+"<div class=\"card\"><h2>摄像头</h2><div class=\"ov-val\" id=\"cam_status_val\" style=\"font-size:22px\">离线</div></div>\n"
+"<div class=\"card\"><h2>运动检测</h2><div class=\"ov-val\" id=\"cam_motion_val\" style=\"font-size:22px\">--</div></div>\n"
+"<div class=\"card\"><h2>人脸计数</h2><div class=\"ov-val\" id=\"cam_faces_val\" style=\"font-size:22px\">0</div></div>\n"
+"<div class=\"card\"><h2>推理耗时</h2><div class=\"ov-val\" id=\"cam_infer_val\" style=\"font-size:22px\">--</div></div>\n"
+"</div>\n"
+"</div>\n"
+
+/* ======== Page: Settings ======== */
+"<div id=\"page-settings\" class=\"page\">\n"
+"<div class=\"card\">\n"
+"<h2>传感器阈值</h2>\n"
+"<div class=\"cfg-grid\" id=\"cfg_grid\">\n"
+"<div class=\"cfg-item\"><span class=\"cfg-lbl\">加载中...</span></div>\n"
+"</div>\n"
+"</div>\n"
+"<div class=\"card\">\n"
+"<h2>系统信息</h2>\n"
+"<div class=\"sensor-row\">"
+"<span class=\"lbl\">核心进程</span><span class=\"val\" id=\"cfg_hubd\">--</span>"
+"<span class=\"lbl\">板卡时间</span><span class=\"val\" id=\"cfg_time\">--</span>"
+"</div>\n"
+"</div>\n"
+"</div>\n"
+
+/* ======== JavaScript ======== */
 "<script>\n"
-"var connLost=0;\n"
+"var connLost=0,currentPage='dashboard',alarmData=[],camOnline=!1;\n"
+
+/* ---- clock ---- */
+"function tick(){var d=new Date();"
+"document.getElementById('clock').textContent="
+"('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)}\n"
+"setInterval(tick,1000);tick();\n"
+
+/* ---- tab navigation ---- */
+"function switchPage(name){\n"
+"currentPage=name;\n"
+"document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});\n"
+"document.getElementById('page-'+name).classList.add('active');\n"
+"document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});\n"
+"document.querySelector('[data-page='+name+']').classList.add('active');\n"
+"if(name==='alarms')loadAlarms(50);\n"
+"if(name==='camera')refreshCamera();\n"
+"}\n"
+"document.querySelectorAll('.tab').forEach(function(t){\n"
+"t.addEventListener('click',function(){switchPage(this.dataset.page)})\n"
+"});\n"
+
+/* ---- dot helper ---- */
 "function setDot(id,on){var d=document.getElementById(id);"
-"d.className='dot '+(on?'dot-on':'dot-off');}\n"
+"d.className='dot '+(on?'dot-on':'dot-off')}\n"
+
+/* ---- format uptime ---- */
+"function fmtUptime(s){if(s<60)return s+'秒';if(s<3600)return Math.floor(s/60)+'分';"
+"var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);"
+"if(h<24)return h+'时 '+m+'分';var d=Math.floor(h/24);return d+'天 '+(h%24)+'时'}\n"
+
+/* ---- update dashboard UI ---- */
 "function updateUI(d){\n"
-"var st=d.state||'UNKNOWN';\n"
-"var b=document.getElementById('state_badge');\n"
-"b.textContent=st;b.className='state-badge state-'+st;\n"
-"document.getElementById('reason_line').textContent=d.alarm_reason||'';\n"
+"var st=d.state||'UNKNOWN';var stCN={NORMAL:'正常',WARNING:'警告',ALARM:'报警',FAULT:'故障',UNKNOWN:'未知'}[st]||st;\n"
+/* overview strip */
+"var os=document.getElementById('ov_state');os.className='ov-card state-'+st;"
+"os.querySelector('.ov-val').textContent=stCN;\n"
+"document.getElementById('ov_alarms').querySelector('.ov-val').textContent="
+"(d.alarm||{}).count||0;\n"
+"var up=(d.system||{}).uptime_sec||0;\n"
+"document.getElementById('ov_uptime').querySelector('.ov-val').textContent=fmtUptime(up);\n"
+"document.getElementById('ov_ip').querySelector('.ov-val').textContent=(d.system||{}).ip||'--';\n"
+/* MPU6050 */
 "var m=d.mpu6050||{};\n"
-"document.getElementById('mpu_accel').textContent=(m.ax||0)+', '+(m.ay||0)+', '+(m.az||0);\n"
-"document.getElementById('mpu_gyro').textContent=(m.gx||0)+', '+(m.gy||0)+', '+(m.gz||0);\n"
-"document.getElementById('mpu_temp').textContent=(m.temp||0)+' C';\n"
+"document.getElementById('mpu_accel').textContent=(m.ax||0)+' '+(m.ay||0)+' '+(m.az||0);\n"
+"document.getElementById('mpu_gyro').textContent=(m.gx||0)+' '+(m.gy||0)+' '+(m.gz||0);\n"
+"document.getElementById('mpu_temp').textContent=(m.temp||0).toFixed(1)+' \\u00b0C';\n"
 "document.getElementById('mpu_motion').textContent=m.motion_delta||0;\n"
 "setDot('mpu_dot',m.online);\n"
+/* AP3216C */
 "var a=d.ap3216c||{};\n"
 "document.getElementById('ap_ir').textContent=a.ir||0;\n"
 "document.getElementById('ap_als').textContent=a.als||0;\n"
 "document.getElementById('ap_ps').textContent=a.ps||0;\n"
 "setDot('ap_dot',a.online);\n"
+/* device */
 "var dev=d.device||{};\n"
 "document.getElementById('dev_led').textContent=dev.led||'--';\n"
 "document.getElementById('dev_buzzer').textContent=dev.buzzer||'--';\n"
 "var al=d.alarm||{};\n"
-"document.getElementById('alarm_count').textContent=al.count||0;\n"
-"document.getElementById('alarm_muted').textContent=al.muted?'YES':'NO';\n"
-"document.getElementById('alarm_acked').textContent=al.acknowledged?'YES':'NO';\n"
-"var s=d.system||{};\n"
-"document.getElementById('sys_uptime').textContent=(s.uptime_sec||0)+' s';\n"
-"document.getElementById('sys_ip').textContent=s.ip||'--';\n"
-"document.getElementById('hdr_ip').textContent=s.ip||'--';\n"
-"var cs=document.getElementById('conn_status');\n"
-"cs.innerHTML='<span class=\"conn-dot conn-live\"></span> LIVE';\n"
-"connLost=0;\n"
+"document.getElementById('dev_muted').textContent=al.muted?'YES':'NO';\n"
+"document.getElementById('dev_acked').textContent=al.acknowledged?'YES':'NO';\n"
+/* button state feedback */
+"var bm=document.getElementById('btn_mute');"
+"if(al.muted){bm.textContent='🔇 已静音';bm.classList.add('active');bm.disabled=!0}"
+"else{bm.textContent='🔇 静音';bm.classList.remove('active');bm.disabled=!1}\n"
+"var ba=document.getElementById('btn_ack');"
+"if(al.acknowledged){ba.textContent='✅ 已确认';ba.classList.add('active');ba.disabled=!0}"
+"else{ba.textContent='✅ 确认报警';ba.classList.remove('active');ba.disabled=!1}\n"
+/* vision */
+"var vis=d.vision||{};camOnline=vis.camera_online||!1;\n"
+/* connection */
+"document.getElementById('conn_status').innerHTML="
+"'<span class=\"conn-dot conn-live\"></span>在线';connLost=0;\n"
 "}\n"
-"async function refresh(){\n"
-"try{\n"
-"var r=await fetch('/api/status');\n"
-"if(!r.ok)throw new Error('status '+r.status);\n"
-"updateUI(await r.json());\n"
-"}catch(e){\n"
-"connLost++;\n"
-"if(connLost>=3){\n"
-"var cs=document.getElementById('conn_status');\n"
-"cs.innerHTML='<span class=\"conn-dot conn-lost\"></span> OFFLINE';\n"
+
+/* ---- load alarm history ---- */
+"function loadAlarms(limit){\n"
+"fetch('/api/alarms?limit='+limit).then(function(r){return r.json()}).then(function(rows){\n"
+"alarmData=rows||[];\n"
+"renderAlarmTable('alarms_tbody',alarmData,7);\n"
+"if(document.getElementById('recent_alarms_tbody'))\n"
+"renderAlarmTable('recent_alarms_tbody',alarmData.slice(0,5),4);\n"
+"}).catch(function(){});\n"
 "}\n"
+
+"function renderAlarmTable(tbodyId,rows,cols){\n"
+"var tb=document.getElementById(tbodyId);if(!tb)return;\n"
+"if(!rows.length){tb.innerHTML='<tr><td colspan='+cols+' style=\"text-align:center;color:var(--text2);padding:30px\">暂无报警记录</td></tr>';return}\n"
+"var h='';\n"
+"rows.forEach(function(r){\n"
+"var badge='<span class=\"badge-sm badge-'+r.state+'\">'+r.state+'</span>';\n"
+"if(cols<=4){\n"
+"h+='<tr><td>'+r.timestamp+'</td><td>'+badge+'</td><td>'+r.reason+'</td><td>'+(r.motion_delta||0)+' / PS'+(r.ps||0)+'</td></tr>';\n"
+"}else{\n"
+"h+='<tr><td>'+r.timestamp+'</td><td>'+badge+'</td><td>'+r.reason+'</td><td>'+(r.motion_delta||0)+'</td><td>'+(r.ps||0)+'</td><td>'+(r.als||0)+'</td><td>'+(r.mpu_temp||0).toFixed(1)+' \\u00b0C</td></tr>';\n"
 "}\n"
+"});\n"
+"tb.innerHTML=h;\n"
 "}\n"
+
+/* ---- camera refresh ---- */
+"function refreshCamera(){\n"
+"var cs=document.getElementById('cam_status_val');\n"
+"var cm=document.getElementById('cam_motion_val');\n"
+"var cf=document.getElementById('cam_faces_val');\n"
+"var ci=document.getElementById('cam_infer_val');\n"
+"var cp=document.getElementById('cam_preview');\n"
+"var ch=document.getElementById('cam_update_hint');\n"
+"fetch('/api/vision').then(function(r){return r.json()}).then(function(v){\n"
+"var on=v.camera_online||!1;camOnline=on;\n"
+"if(cs){cs.textContent=on?'在线':'离线';cs.style.color=on?'#3fb950':'#f85149'}\n"
+"if(cm)cm.textContent=v.motion_detected?'检测到':'无';\n"
+"if(cf)cf.textContent=v.face_count||0;\n"
+"if(ci)ci.textContent=v.inference_ms?v.inference_ms+' ms':'--';\n"
+"if(cp&&on){cp.innerHTML='<img src=\"/api/snapshot?t='+Date.now()+'\" alt=\"snapshot\" onerror=\"this.parentElement.innerHTML=\\'<span class=cam-placeholder>快照加载失败</span>\\'\">';\n"
+"if(ch)ch.textContent='更新于 '+new Date().toLocaleTimeString();}\n"
+"if(cp&&!on){cp.innerHTML='<span class=\"cam-placeholder\">摄像头离线或未连接</span>';if(ch)ch.textContent=''}\n"
+"}).catch(function(){});\n"
+"}\n"
+
+/* ---- settings ---- */
+"function loadSettings(d){\n"
+"var cfg=d.config||{};\n"
+"var g=document.getElementById('cfg_grid');if(!g)return;\n"
+"var items=["
+"{k:'sample_interval_ms',l:'采样周期',u:' ms'},"
+"{k:'als_low_threshold',l:'环境光下限',u:''},"
+"{k:'ps_warning_threshold',l:'接近告警阈值',u:''},"
+"{k:'ps_alarm_threshold',l:'接近报警阈值',u:''},"
+"{k:'motion_warning_threshold',l:'震动告警阈值',u:''},"
+"{k:'motion_alarm_threshold',l:'震动报警阈值',u:''}"
+"];\n"
+"var h='';\n"
+"items.forEach(function(it){var v=cfg[it.k];h+='<div class=\"cfg-item\"><span class=\"cfg-lbl\">'+it.l+'</span><span class=\"cfg-val\">'+(v!==undefined?v+'':'--')+it.u+'</span></div>'})\n"
+"g.innerHTML=h;\n"
+"var hubd=(d.system||{}).sensor_hubd||'--';\n"
+"document.getElementById('cfg_hubd').textContent=hubd;\n"
+"document.getElementById('cfg_time').textContent=new Date().toLocaleString();\n"
+"}\n"
+
+/* ---- main refresh loop ---- */
+"function refresh(){\n"
+"fetch('/api/status').then(function(r){return r.json()}).then(function(d){\n"
+"if(currentPage==='dashboard')updateUI(d);\n"
+"loadSettings(d);\n"
+"}).catch(function(){\n"
+"connLost++;if(connLost>=3){\n"
+"document.getElementById('conn_status').innerHTML='<span class=\"conn-dot conn-lost\"></span>离线'}\n"
+"});\n"
+"}\n"
+
+/* ---- send command ---- */
 "function sendCmd(cmd,btn){\n"
-"if(btn){btn.disabled=true;setTimeout(function(){btn.disabled=false;},2000);}\n"
-"fetch('/api/cmd?cmd='+encodeURIComponent(cmd)).catch(function(){});\n"
+"if(btn){btn.disabled=true;setTimeout(function(){btn.disabled=false},2000)}\n"
+"fetch('/api/cmd?cmd='+encodeURIComponent(cmd)).catch(function(){})\n"
 "}\n"
+
+/* ---- startup ---- */
 "setInterval(refresh,1000);refresh();\n"
+"setInterval(function(){if(currentPage==='camera')refreshCamera()},3000);\n"
 "</script>\n"
 "</body>\n"
 "</html>\n";
@@ -719,8 +972,17 @@ static void *connection_handler(void *arg)
         const char *auth_hdr = strstr(buf, "Authorization: Basic ");
         if (auth_hdr) {
             auth_hdr += 21;  /* skip "Authorization: Basic " */
+            /* Copy only the base64 token (stop at \r, \n, or end) */
+            char b64[256];
+            {
+                int bi = 0;
+                while (auth_hdr[bi] && auth_hdr[bi] != '\r'
+                       && auth_hdr[bi] != '\n' && bi < 255)
+                    { b64[bi] = auth_hdr[bi]; bi++; }
+                b64[bi] = '\0';
+            }
             char decoded[128];
-            if (base64_decode(auth_hdr, decoded, sizeof(decoded)) > 0) {
+            if (base64_decode(b64, decoded, sizeof(decoded)) > 0) {
                 char expected[128];
                 snprintf(expected, sizeof(expected), "%s:%s", g_auth_user, g_auth_pass);
                 if (!strcmp(decoded, expected))
@@ -813,6 +1075,86 @@ static void *connection_handler(void *arg)
         sse_remove_client(client_fd);
         close(client_fd);
         return NULL;
+
+    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/snapshot")) {
+        /* Find the latest JPEG snapshot */
+        char snap_path[512];
+        snap_path[0] = '\0';
+        /* Use a shell one-liner to get the newest file.  Keeps the
+           HTTP server simple and avoids a directory-scan in C. */
+        {
+            FILE *fp = popen(
+                "ls -t /var/log/edgeguard/snapshots/*.jpg 2>/dev/null | head -1",
+                "r");
+            if (fp) {
+                if (fgets(snap_path, sizeof(snap_path), fp)) {
+                    size_t len = strlen(snap_path);
+                    if (len > 0 && snap_path[len-1] == '\n')
+                        snap_path[len-1] = '\0';
+                }
+                pclose(fp);
+            }
+        }
+
+        if (snap_path[0]) {
+            FILE *img = fopen(snap_path, "rb");
+            if (img) {
+                fseek(img, 0, SEEK_END);
+                long sz = ftell(img);
+                rewind(img);
+                if (sz > 0 && sz < 1024*1024) {  /* 1 MB limit */
+                    /* send header first */
+                    char hdr[256];
+                    snprintf(hdr, sizeof(hdr),
+                             "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: image/jpeg\r\n"
+                             "Content-Length: %ld\r\n"
+                             "Connection: close\r\n"
+                             "Access-Control-Allow-Origin: *\r\n"
+                             "\r\n", sz);
+                    send_response(client_fd, hdr);
+                    /* then send file content */
+                    char *imgbuf = malloc(sz);
+                    if (imgbuf) {
+                        fread(imgbuf, 1, sz, img);
+                        size_t sent = 0;
+                        while (sent < (size_t)sz) {
+                            ssize_t n = send(client_fd, imgbuf + sent,
+                                             (size_t)sz - sent, MSG_NOSIGNAL);
+                            if (n <= 0) break;
+                            sent += (size_t)n;
+                        }
+                        free(imgbuf);
+                    }
+                }
+                fclose(img);
+                close(client_fd);
+                return NULL;
+            }
+        }
+        /* fallthrough — no snapshot available */
+        build_404(resp, sizeof(resp));
+
+    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/vision")) {
+        char vision_buf[2048];
+        int n = read_file("/tmp/edgeguard_vision.json",
+                          vision_buf, sizeof(vision_buf));
+        if (n < 0 || vision_buf[0] == '\0') {
+            snprintf(vision_buf, sizeof(vision_buf),
+                     "{\"camera_online\":false,\"motion_detected\":false,"
+                     "\"face_count\":0,\"snapshot_path\":null,"
+                     "\"inference_ms\":0,\"face_verify_result\":null}\n");
+            n = (int)strlen(vision_buf);
+        }
+        size_t blen = (size_t)n;
+        snprintf(resp, sizeof(resp),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: application/json\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n"
+                 "Access-Control-Allow-Origin: *\r\n"
+                 "\r\n"
+                 "%s", blen, vision_buf);
 
     } else if (!strcmp(method, "GET") && !strcmp(path, "/api/alarms")) {
         int limit = 50;

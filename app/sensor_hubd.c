@@ -31,6 +31,7 @@
 #define STATUS_JSON_PATH  "/tmp/edgeguard_status.json"
 #define STATUS_JSON_TMP   "/tmp/edgeguard_status.json.tmp"
 #define CMD_JSON_PATH     "/tmp/edgeguard_cmd.json"
+#define VISION_JSON_PATH  "/tmp/edgeguard_vision.json"
 #define CONFIG_PATH       "/etc/edgeguard/config.json"
 #define CONFIG_DIR        "/etc/edgeguard"
 #define LOG_DIR           "/var/log/edgeguard"
@@ -68,6 +69,13 @@ struct mpu6050_data {
 
 struct ap3216c_data {
     int ir, als, ps;
+    int valid;
+};
+
+struct vision_data {
+    int camera_online;
+    int motion_detected;
+    int face_count;
     int valid;
 };
 
@@ -124,17 +132,21 @@ static const char *state_to_string(enum alarm_state s)
 }
 
 static const char *get_alarm_reason(enum alarm_state s, int motion_delta,
-                                     int ps, int als, int mpu_ok, int ap_ok)
+                                     int ps, int als, int mpu_ok, int ap_ok,
+                                     int vision_motion, int vision_faces)
 {
     switch (s) {
     case STATE_NORMAL:   return "none";
     case STATE_FAULT:    return mpu_ok ? "ap3216c sensor fault"
                                       : "mpu6050 sensor fault";
     case STATE_ALARM:
+        if (vision_faces > 0) return "face intrusion";
+        if (vision_motion)    return "vision motion detected";
         if (motion_delta > 0) return "motion threshold exceeded";
         if (ps > 0)           return "proximity alarm";
         return "alarm";
     case STATE_WARNING:
+        if (vision_motion)    return "vision motion warning";
         if (motion_delta > 0) return "motion warning";
         if (als > 0)          return "low ambient light";
         if (ps > 0)           return "proximity warning";
@@ -255,6 +267,38 @@ static int read_ap3216c(struct ap3216c_data *d)
         return -1;
     }
     return parse_ap3216c(buf, d);
+}
+
+/* Read /tmp/edgeguard_vision.json (written by edgeguard_visiond).
+   This is best-effort — if the file doesn't exist or visiond isn't
+   running, we simply mark vision data invalid and continue. */
+static int read_vision(struct vision_data *v)
+{
+    memset(v, 0, sizeof(*v));
+
+    FILE *fp = fopen(VISION_JSON_PATH, "r");
+    if (!fp) return -1;  /* visiond not running yet — not an error */
+
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    fclose(fp);
+    if (n == 0) return -1;
+    buf[n] = '\0';
+
+    /* extract key fields with minimal JSON parser */
+    v->camera_online   = strstr(buf, "\"camera_online\": true")  ? 1 : 0;
+    v->motion_detected = strstr(buf, "\"motion_detected\": true") ? 1 : 0;
+
+    /* face_count is an integer: look for "face_count": N */
+    {
+        const char *p = strstr(buf, "\"face_count\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) v->face_count = atoi(p + 1);
+        }
+    }
+    v->valid = 1;
+    return 0;
 }
 
 static int calc_motion_delta(const struct mpu6050_data *cur,
@@ -489,6 +533,7 @@ static void get_network_info(char *ip_out, size_t ip_size)
 static void write_status_json(const struct app_config *cfg,
                               const struct mpu6050_data *mpu,
                               const struct ap3216c_data *ap,
+                              const struct vision_data *vis,
                               enum alarm_state state,
                               int motion_delta)
 {
@@ -533,6 +578,11 @@ static void write_status_json(const struct app_config *cfg,
         "    \"ps\": %d,\n"
         "    \"online\": %s\n"
         "  },\n"
+        "  \"vision\": {\n"
+        "    \"camera_online\": %s,\n"
+        "    \"motion_detected\": %s,\n"
+        "    \"face_count\": %d\n"
+        "  },\n"
         "  \"device\": {\n"
         "    \"led\": \"%s\",\n"
         "    \"buzzer\": \"%s\",\n"
@@ -560,7 +610,8 @@ static void write_status_json(const struct app_config *cfg,
         "}\n",
         state_to_string(state),
         get_alarm_reason(state, motion_delta, ap->ps, ap->als,
-                         mpu->valid, ap->valid),
+                         mpu->valid, ap->valid,
+                         0, 0),
         ts_ms,
         mpu->valid ? mpu->ax : 0,
         mpu->valid ? mpu->ay : 0,
@@ -575,6 +626,9 @@ static void write_status_json(const struct app_config *cfg,
         ap->valid ? ap->als : 0,
         ap->valid ? ap->ps : 0,
         ap->valid ? "true" : "false",
+        (vis->valid && vis->camera_online)   ? "true" : "false",
+        (vis->valid && vis->motion_detected) ? "true" : "false",
+        vis->valid ? vis->face_count : 0,
         g_cur_led,
         g_cur_buzzer,
         g_alarm_count,
@@ -659,6 +713,7 @@ static enum alarm_state evaluate_state(const struct app_config *cfg,
                                         const struct mpu6050_data *mpu,
                                         const struct mpu6050_data *prev_mpu,
                                         const struct ap3216c_data *ap,
+                                        const struct vision_data *vis,
                                         int *motion_delta_out,
                                         int *mpu_ok, int *ap_ok)
 {
@@ -677,7 +732,10 @@ static enum alarm_state evaluate_state(const struct app_config *cfg,
         g_fault_count = 0;
     }
 
-    /* ALARM level */
+    /* ALARM level — vision takes priority (face intrusion) */
+    if (vis->valid && vis->camera_online && vis->face_count > 0)
+        return STATE_ALARM;
+
     if (mpu->valid && prev_mpu->valid &&
         motion_delta > cfg->motion_alarm_th)
         return STATE_ALARM;
@@ -686,6 +744,9 @@ static enum alarm_state evaluate_state(const struct app_config *cfg,
         return STATE_ALARM;
 
     /* WARNING level */
+    if (vis->valid && vis->camera_online && vis->motion_detected)
+        return STATE_WARNING;
+
     if (mpu->valid && prev_mpu->valid &&
         motion_delta > cfg->motion_warning_th)
         return STATE_WARNING;
@@ -863,6 +924,7 @@ int main(int argc, char *argv[])
     struct app_config cfg;
     struct mpu6050_data mpu, prev_mpu;
     struct ap3216c_data ap;
+    struct vision_data vis;
     enum alarm_state state = STATE_NORMAL;
     enum alarm_state last_state = -1;
     int motion_delta = 0;
@@ -911,6 +973,7 @@ int main(int argc, char *argv[])
 
         read_mpu6050(&mpu);
         read_ap3216c(&ap);
+        read_vision(&vis);
 
         /* key override: clear alarm */
         if (process_key_events(key_fd)) {
@@ -925,7 +988,7 @@ int main(int argc, char *argv[])
             log_event(&cfg, "INFO", "alarm cleared by key");
             last_state = -1;
         } else {
-            state = evaluate_state(&cfg, &mpu, &prev_mpu, &ap,
+            state = evaluate_state(&cfg, &mpu, &prev_mpu, &ap, &vis,
                                    &motion_delta, &mpu_ok, &ap_ok);
         }
 
@@ -941,7 +1004,8 @@ int main(int argc, char *argv[])
             snprintf(msg, sizeof(msg), "%s → %s  (reason: %s)",
                      state_to_string(last_state), state_to_string(state),
                      get_alarm_reason(state, motion_delta,
-                                      ap.ps, ap.als, mpu_ok, ap_ok));
+                                      ap.ps, ap.als, mpu_ok, ap_ok,
+                                      vis.motion_detected, vis.face_count));
             log_event(&cfg,
                       state == STATE_NORMAL ? "INFO" : "ALARM",
                       msg);
@@ -949,7 +1013,8 @@ int main(int argc, char *argv[])
             {
                 double t = mpu.valid ? MPU_TEMP_TO_C(mpu.temp) : 0.0;
                 const char *reason = get_alarm_reason(state, motion_delta,
-                    ap.ps, ap.als, mpu_ok, ap_ok);
+                    ap.ps, ap.als, mpu_ok, ap_ok,
+                    vis.motion_detected, vis.face_count);
                 db_log_alarm(state_to_string(state), reason,
                              motion_delta, ap.ps, ap.als, t,
                              (state == STATE_NORMAL) ? 1 : 0);
@@ -978,7 +1043,7 @@ int main(int argc, char *argv[])
         check_cmd_file(&cfg, &state);
 
         /* write JSON status */
-        write_status_json(&cfg, &mpu, &ap, state, motion_delta);
+        write_status_json(&cfg, &mpu, &ap, &vis, state, motion_delta);
 
         /* console */
         print_status(&mpu, &ap, state, motion_delta);

@@ -13,6 +13,7 @@ EdgeGuard-6ULL 是一个嵌入式边缘安全节点，通过 I2C 传感器（MPU
 - **SSE 实时数据推送**（无需轮询）
 - **SQLite 报警历史查询**
 - **MQTT 遥测上报**（IoT 标准协议）
+- **USB 摄像头视觉监控**（运动检测 + 快照留存，可选 AI 人脸检测）
 
 PC 通过网线直连板子即可监控和控制。
 
@@ -27,11 +28,13 @@ EdgeGuard-6ULL/
 │   ├── edgeguard_httpd.c       # HTTP 服务器：Web仪表板、REST API、SSE推送、SQLite查询、Basic Auth
 │   ├── edgeguard_mqttd.c       # MQTT客户端：遥测上报、断线重连
 │   ├── sqlite3.c / sqlite3.h   # SQLite 3.53.1 amalgamation（嵌入式数据库，编译进二进制）
-│   └── Makefile                # 交叉编译 makefile（3个target）
+│   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 双缓冲）
+│   ├── edgeguard_visiond.c     # 视觉守护进程：定时拍照、运动检测、写 vision.json
+│   └── Makefile                # 交叉编译 makefile（4个target）
 │
 ├── ui/                         # Qt5 本地触摸屏界面（C++）
 │   ├── main.cpp                # 入口：QApplication + showFullScreen()
-│   ├── mainwindow.h / .cpp     # 主窗口：5页 QStackedWidget + 触摸滑动 + JSON解析
+│   ├── mainwindow.h / .cpp     # 主窗口：6页 QStackedWidget + 触摸滑动 + JSON解析 + 登录
 │   ├── EdgeGuardUI.pro         # qmake 工程文件
 │   ├── run_linuxfb.sh          # 板子启动脚本
 │   └── status_sample.json      # 测试用示例 JSON
@@ -53,7 +56,8 @@ EdgeGuard-6ULL/
 │   ├── edgeguard.service       # sensor_hubd 服务单元
 │   ├── edgeguard-ui.service    # Qt UI 服务单元
 │   ├── edgeguard-httpd.service # HTTP 服务器服务单元
-│   └── edgeguard-mqttd.service # MQTT 客户端服务单元
+│   ├── edgeguard-mqttd.service # MQTT 客户端服务单元
+│   └── edgeguard-visiond.service # 视觉守护进程服务单元
 │
 ├── CLAUDE.md                   # Claude Code 项目指令
 └── README.md                   # 本文件
@@ -75,14 +79,23 @@ EdgeGuard-6ULL/
 │  │ 状态机评估    │  │ REST API     │  │ 报警推送       │      │
 │  │ LED/蜂鸣器   │  │ SSE推送      │  │ 遥测数据       │      │
 │  │ 写JSON/DB    │  │ SQLite查询   │  │               │      │
+│  │ 读vision.json│  │ 返回快照      │  │               │      │
 │  └───┬──┬──┬────┘  └──────┬───────┘  └──────┬────────┘      │
+│      │  │  │              │                  │               │
+│      │  │  │  ┌───────────┴──────────┐       │               │
+│      │  │  │  │ edgeguard_visiond    │       │               │
+│      │  │  │  │ (USB摄像头守护进程)    │       │               │
+│      │  │  │  │ 拍照+运动检测+快照    │       │               │
+│      │  │  │  └──────────┬──────────┘       │               │
 │      │  │  │              │                  │               │
 │      ↓  ↓  ↓              ↓                  ↓               │
 │  ┌───────────────────────────────────────────────────────┐   │
 │  │        /tmp/edgeguard_status.json    (500ms刷新)       │   │
 │  │        /tmp/edgeguard_cmd.json       (命令通道)        │   │
+│  │        /tmp/edgeguard_vision.json    (摄像头JSON)     │   │
 │  │        /var/log/edgeguard/alarms.db  (SQLite历史)     │   │
 │  │        /var/log/edgeguard/alarm.log  (文本日志)        │   │
+│  │        /var/log/edgeguard/snapshots/ (报警快照)        │   │
 │  │        /etc/edgeguard/config.json    (阈值配置)        │   │
 │  └───────────────────────────────────────────────────────┘   │
 │                              ↑                               │
@@ -109,7 +122,9 @@ EdgeGuard-6ULL/
 |------|--------|--------|------|
 | `/tmp/edgeguard_status.json` | sensor_hubd | HTTP / MQTT / UI | 实时状态（原子写: .tmp → rename） |
 | `/tmp/edgeguard_cmd.json` | HTTP / UI | sensor_hubd | 命令（mute/ack/demo，读取后删除） |
+| `/tmp/edgeguard_vision.json` | edgeguard_visiond | sensor_hubd / HTTP / UI | 摄像头状态 + 运动/人脸检测结果 |
 | `/var/log/edgeguard/alarms.db` | sensor_hubd | HTTP | 报警历史（SQLite WAL模式） |
+| `/var/log/edgeguard/snapshots/` | edgeguard_visiond | HTTP | 报警 JPEG 快照 |
 | `/etc/edgeguard/config.json` | 管理员 | sensor_hubd | 传感器阈值配置 |
 
 ---
@@ -128,13 +143,26 @@ EdgeGuard-6ULL/
 
 ### edgeguard_httpd — HTTP 服务器
 
+**Web Dashboard（多页面 SPA）**：4 个页面纯前端路由切换，零外部依赖。
+
+| 页面 | 内容 |
+|------|------|
+| **Dashboard** | 状态概览栏（State / Alarms / Uptime / IP）+ MPU6050 + AP3216C + 设备控制 + 按钮状态反馈 + 最近 5 条报警 |
+| **Alarms** | SQLite 报警历史表格（时间、级别徽章、原因、传感器详情） |
+| **Camera** | 实时快照预览 + 视觉检测结果（在线状态、运动、人脸计数、推理耗时） |
+| **Settings** | 6 项传感器阈值展示 + 系统信息 |
+
+**API 端点**：
+
 | 端点 | 方法 | 认证 | 功能 |
 |------|------|------|------|
-| `/` | GET | 无 | 嵌入式 Web Dashboard |
+| `/` | GET | 无 | 嵌入式 Web Dashboard（多页面 SPA） |
 | `/api/status` | GET | 无 | 完整状态 JSON |
 | `/api/stream` | GET | 无 | SSE 实时推送 |
 | `/api/alarms?limit=N` | GET | 无 | SQLite 报警历史 |
 | `/api/alarms/count` | GET | 无 | 报警总数 |
+| `/api/snapshot` | GET | 无 | 最新 JPEG 快照（image/jpeg） |
+| `/api/vision` | GET | 无 | 摄像头视觉检测 JSON |
 | `/api/cmd` | GET/POST | Basic Auth | 发送命令 |
 
 ### edgeguard_mqttd — MQTT 遥测
@@ -148,10 +176,21 @@ EdgeGuard-6ULL/
 
 ### edgeguard-ui — Qt5 触摸屏界面
 
-- **5 页**：Dashboard / Sensors / Alarms / Settings / System
-- **触摸**：原生 evdev 读取，上滑下一页、下滑上一页、点击侧边栏切页
-- **键盘**：按键 1-5 切页、Esc 退出
+- **6 页**：Login / Dashboard / Sensors / Alarms / Settings / System / Vision
+- **触摸**：通过 Qt linuxfb QPA 的 QMouseEvent 实现上下滑动切页、点击侧边栏切页
+- **键盘**：按键 1-6 切页、Esc 退出
 - **Demo 模式**：`--demo` 参数模拟传感器数据
+- **登录认证**：用户名/密码 + 虚拟键盘，3 次失败锁定 30 秒
+
+### edgeguard_visiond — USB 摄像头视觉守护进程（P1 阶段）
+
+- **周期**：2000ms（可配置）
+- **摄像头**：USB UVC (Logitech B525)，V4L2 MJPEG 640×480 捕获
+- **运动检测**：JPEG 帧大小变化启发式检测（阈值 15%）
+- **输出**：`/tmp/edgeguard_vision.json` + `/var/log/edgeguard/snapshots/*.jpg`
+- **自动恢复**：摄像头拔出/插入自动重连
+- **内核依赖**：`CONFIG_USB_VIDEO_CLASS=y`（uvcvideo.ko）
+- **详细方案**：参见 `plan/AI_CAMERA_PLAN.md`
 
 ---
 
@@ -166,6 +205,7 @@ EdgeGuard-6ULL/
 | 按键 | GPIO (中断) | `/dev/input/event0` |
 | GT9157 触摸屏 | I2C1, 0x14 | `/dev/input/event*` |
 | LCD | LCDIF 800×480 | `/dev/fb0` |
+| USB OTG2 (Host) | USB 2.0 | `/dev/video0`（摄像头） |
 | 以太网 | fec1/fec2 RMII | eth0/eth1 |
 
 ---
@@ -308,6 +348,7 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 | `edgeguard-httpd.service` | After edgeguard | HTTP 服务器 :8080 |
 | `edgeguard-mqttd.service` | After edgeguard | MQTT 客户端 |
 | `edgeguard-ui.service` | After edgeguard + multi-user | Qt5 LCD 界面 |
+| `edgeguard-visiond.service` | After multi-user | USB 摄像头视觉守护进程 |
 
 所有服务均配置 `Restart=always`，异常退出自动重启。
 
