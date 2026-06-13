@@ -126,6 +126,8 @@ MainWindow::MainWindow(QWidget *parent)
       m_camFacesLabel(nullptr),
       m_camSnapshotLabel(nullptr),
       m_camInferenceLabel(nullptr),
+      m_topBar(nullptr),
+      m_logoutBtn(nullptr),
       m_loginPage(nullptr),
       m_sidebar(nullptr),
       m_authenticated(false),
@@ -167,13 +169,48 @@ void MainWindow::buildUi()
     resize(800, 480);
 
     QWidget *root = new QWidget(this);
-    QHBoxLayout *mainLayout = new QHBoxLayout(root);
-    mainLayout->setContentsMargins(12, 12, 12, 12);
-    mainLayout->setSpacing(12);
+    QVBoxLayout *rootLayout = new QVBoxLayout(root);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(0);
+
+    // ---- top bar (hidden on login) ----
+    m_topBar = new QWidget(root);
+    m_topBar->setFixedHeight(34);
+    m_topBar->setStyleSheet("background: #0a1a2f; border-bottom: 1px solid #1a3050;");
+    QHBoxLayout *topLayout = new QHBoxLayout(m_topBar);
+    topLayout->setContentsMargins(14, 0, 10, 0);
+    topLayout->setSpacing(8);
+
+    QLabel *topBrand = new QLabel("EdgeGuard 6ULL  ·  RickyDuran", m_topBar);
+    topBrand->setStyleSheet("font-size: 13px; font-weight: 700; color: #4a7fb5; border: none;");
+    topLayout->addWidget(topBrand);
+    topLayout->addStretch(1);
+
+    m_logoutBtn = new QPushButton("Logout", m_topBar);
+    m_logoutBtn->setFocusPolicy(Qt::NoFocus);
+    m_logoutBtn->setFixedSize(72, 28);
+    m_logoutBtn->setStyleSheet(
+        "QPushButton { background: transparent; color: #ff5c5c; border: 1px solid #5a3030; "
+        "border-radius: 6px; font-size: 12px; font-weight: 700; padding: 0px 8px; } "
+        "QPushButton:pressed { background: #3a2020; }");
+    connect(m_logoutBtn, &QPushButton::clicked, this, [this]() {
+        m_authenticated = false;
+        if (m_loginPage) m_loginPage->reset();
+        switchPage(0);
+    });
+    topLayout->addWidget(m_logoutBtn);
+
+    rootLayout->addWidget(m_topBar);
+    m_topBar->hide();  // hidden until authenticated
+
+    // ---- body: sidebar + stack ----
+    QHBoxLayout *bodyLayout = new QHBoxLayout();
+    bodyLayout->setContentsMargins(12, 10, 12, 12);
+    bodyLayout->setSpacing(12);
 
     m_sidebar = buildSidebar();
     m_sidebar->setFixedWidth(0);  // collapsed on login
-    mainLayout->addWidget(m_sidebar, 0);
+    bodyLayout->addWidget(m_sidebar, 0);
 
     m_stack = new QStackedWidget(root);
     m_loginPage = new LoginPage(root);
@@ -184,7 +221,9 @@ void MainWindow::buildUi()
     m_stack->addWidget(buildSettingsPage()); // 4: Settings
     m_stack->addWidget(buildSystemPage());   // 5: System
     m_stack->addWidget(buildVisionPage());   // 6: Vision
-    mainLayout->addWidget(m_stack, 1);
+    bodyLayout->addWidget(m_stack, 1);
+
+    rootLayout->addLayout(bodyLayout, 1);
 
     setCentralWidget(root);
     switchPage(0);  // start on login
@@ -225,25 +264,13 @@ QWidget *MainWindow::buildSidebar()
         btn->setObjectName("NavButton");
         btn->setCheckable(true);
         btn->setFocusPolicy(Qt::NoFocus);
-        btn->setMinimumHeight(44);
+        btn->setMinimumHeight(38);
         connect(btn, &QPushButton::clicked, this, [this, i]() { switchPage(i + 1); });
         layout->addWidget(btn);
         m_navButtons.push_back(btn);
     }
 
     layout->addStretch(1);
-
-    QPushButton *logoutBtn = new QPushButton("Logout", side);
-    logoutBtn->setObjectName("NavButton");
-    logoutBtn->setFocusPolicy(Qt::NoFocus);
-    logoutBtn->setMinimumHeight(44);
-    logoutBtn->setStyleSheet("QPushButton#NavButton { color: #ff5c5c; } QPushButton#NavButton:pressed { background: #2b80ff; color: #ffffff; }");
-    connect(logoutBtn, &QPushButton::clicked, this, [this]() {
-        m_authenticated = false;
-        if (m_loginPage) m_loginPage->reset();
-        switchPage(0);
-    });
-    layout->addWidget(logoutBtn);
 
     return side;
 }
@@ -454,6 +481,10 @@ void MainWindow::switchPage(int index)
     if (m_sidebar)
         m_sidebar->setFixedWidth(index == 0 ? 0 : kSidebarWidth);
 
+    // top bar: hidden on login, shown on authenticated pages
+    if (m_topBar)
+        m_topBar->setVisible(index != 0);
+
     m_stack->setCurrentIndex(index);
     updateNavStyle();
 }
@@ -519,10 +550,14 @@ void MainWindow::mouseMoveEvent(QMouseEvent *event)
         int cur = m_stack ? m_stack->currentIndex() : 0;
         int cnt = m_stack ? m_stack->count() : 0;
         qDebug("[swipe] dy=%d page=%d/%d", dy, cur, cnt);
-        if (dy < 0 && cur < cnt - 1)
+        // Login page: no swipe allowed (only login/logout buttons)
+        if (cur == 0) {
+            /* consumed, do nothing */
+        } else if (dy < 0 && cur < cnt - 1) {
             switchPage(cur + 1);
-        else if (dy > 0 && cur > 1)           // never swipe back to login (page 0)
+        } else if (dy > 0 && cur > 1) {       // never swipe back to login (page 0)
             switchPage(cur - 1);
+        }
     }
 
     QMainWindow::mouseMoveEvent(event);

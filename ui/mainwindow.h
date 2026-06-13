@@ -103,6 +103,10 @@ private:
     QLabel *m_camSnapshotLabel;
     QLabel *m_camInferenceLabel;
 
+    // Top bar (logout)
+    QWidget *m_topBar;
+    QPushButton *m_logoutBtn;
+
     // Login
     LoginPage *m_loginPage;
     QWidget *m_sidebar;

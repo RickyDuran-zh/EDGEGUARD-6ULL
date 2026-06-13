@@ -156,10 +156,10 @@ void LoginPage::onUnlockTimer()
 void LoginPage::buildUi()
 {
     QVBoxLayout *root = new QVBoxLayout(this);
-    root->setContentsMargins(40, 8, 40, 6);
+    root->setContentsMargins(24, 6, 24, 4);
     root->setSpacing(2);
 
-    QLabel *title = new QLabel("EdgeGuard 6ULL", this);
+    QLabel *title = new QLabel("EdgeGuard 6ULL  ·  RickyDuran", this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet("font-size:22px; font-weight:800; color:#ffffff;");
     root->addWidget(title);
@@ -196,7 +196,7 @@ void LoginPage::buildUi()
     root->addWidget(m_lockLabel);
 
     // ---- Keyboard ----
-    const int KH = 28;
+    const int KH = 26;
     QGridLayout *kb = new QGridLayout();
     kb->setSpacing(2);
 

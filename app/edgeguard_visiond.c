@@ -4,6 +4,7 @@
 // IPC: other processes (sensor_hubd, httpd, ui) read the JSON file.
 
 #include "camera_v4l2.h"
+#include "face_detect.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,6 @@
 static volatile int g_running = 1;
 static char   g_device[256];
 static int    g_interval_ms = DEFAULT_INTERVAL_MS;
-static size_t g_last_jpeg_size = 0;
 static int    g_snapshot_count = 0;
 
 static void handle_signal(int sig)
@@ -65,16 +65,6 @@ static int ensure_dir(const char *path)
     return mkdir(path, 0755);
 }
 
-/* Count snapshot files in the directory */
-static int count_snapshots(const char *dir)
-{
-    /* Simple approach: count files matching *.jpg via a shell glob.
-       For an embedded daemon, we just track count in memory and clean
-       oldest when exceeding MAX_SNAPSHOTS. */
-    (void)dir;
-    return g_snapshot_count;
-}
-
 /* Delete oldest snapshot(s) to stay under MAX_SNAPSHOTS */
 static void cleanup_old_snapshots(const char *dir)
 {
@@ -85,7 +75,8 @@ static void cleanup_old_snapshots(const char *dir)
     snprintf(cmd, sizeof(cmd),
              "ls -t %s/*.jpg 2>/dev/null | tail -n +%d | xargs rm -f 2>/dev/null",
              dir, MAX_SNAPSHOTS + 1);
-    system(cmd);
+    int sys_ret = system(cmd);
+    (void)sys_ret;  /* best-effort cleanup, ignore failures */
     g_snapshot_count = MAX_SNAPSHOTS;
 }
 
@@ -114,22 +105,22 @@ static void write_vision_json(int camera_online, int motion_detected,
     FILE *fp = fopen(VISION_JSON_TMP, "w");
     if (!fp) return;
 
-    fprintf(fp,
-        "{\n"
-        "  \"camera_online\": %s,\n"
-        "  \"motion_detected\": %s,\n"
-        "  \"face_count\": %d,\n"
-        "  \"snapshot_path\": %s,\n"
-        "  \"inference_ms\": %ld,\n"
-        "  \"timestamp\": \"%s\",\n"
-        "  \"face_verify_result\": null\n"
-        "}\n",
-        camera_online     ? "true" : "false",
-        motion_detected   ? "true" : "false",
-        face_count,
-        snapshot_path     ? snapshot_path : "null",
-        inference_ms,
-        ts);
+    const char *sp = (snapshot_path && snapshot_path[0]) ? snapshot_path : NULL;
+
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"camera_online\": %s,\n",
+            camera_online ? "true" : "false");
+    fprintf(fp, "  \"motion_detected\": %s,\n",
+            motion_detected ? "true" : "false");
+    fprintf(fp, "  \"face_count\": %d,\n", face_count);
+    if (sp)
+        fprintf(fp, "  \"snapshot_path\": \"%s\",\n", sp);
+    else
+        fprintf(fp, "  \"snapshot_path\": null,\n");
+    fprintf(fp, "  \"inference_ms\": %ld,\n", inference_ms);
+    fprintf(fp, "  \"timestamp\": \"%s\",\n", ts);
+    fprintf(fp, "  \"face_verify_result\": null\n");
+    fprintf(fp, "}\n");
 
     fclose(fp);
     rename(VISION_JSON_TMP, VISION_JSON_PATH);
@@ -183,6 +174,9 @@ int main(int argc, char *argv[])
     /* ensure snapshot directory exists */
     ensure_dir(SNAPSHOT_DIR);
 
+    /* initialize face detection (stub mode if ncnn not available) */
+    face_detect_init("/etc/edgeguard/models");
+
     printf("[visiond] starting  device=%s  %ux%u  interval=%d ms\n",
            g_device, width, height, g_interval_ms);
 
@@ -227,8 +221,18 @@ int main(int argc, char *argv[])
                               (t1.tv_nsec - t0.tv_nsec) / 1000000L;
 
             /* motion detection (JPEG-size heuristic) */
+            size_t old_size = prev_size;
             motion_detected = detect_motion(frame.size, prev_size);
             prev_size = frame.size;
+
+            /* face detection — only run when motion triggers, saves CPU.
+               In stub mode this always returns face_count=0 harmlessly. */
+            int face_count = 0;
+            if (motion_detected) {
+                face_detect_run(frame.data, (int)frame.size, &face_count);
+                if (face_count > 0)
+                    printf("[visiond] FACE detected  count=%d\n", face_count);
+            }
 
             /* save snapshot */
             snapshot_path[0] = '\0';
@@ -252,12 +256,12 @@ int main(int argc, char *argv[])
 
             /* write JSON for consumers */
             write_vision_json(camera_online, motion_detected,
-                              0, snapshot_path, elapsed_ms);
+                              face_count, snapshot_path, elapsed_ms);
 
             if (motion_detected)
                 printf("[visiond] MOTION detected  size_change=%zu→%zu  "
                        "snapshot=%s\n",
-                       prev_size, frame.size,
+                       old_size, frame.size,
                        snapshot_path);
 
             free(frame.data);
@@ -276,6 +280,7 @@ int main(int argc, char *argv[])
             write_vision_json(0, 0, 0, "null", 0);
     }
 
+    face_detect_deinit();
     printf("[visiond] stopped\n");
     return 0;
 }

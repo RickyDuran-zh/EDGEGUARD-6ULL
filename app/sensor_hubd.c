@@ -703,6 +703,86 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         *state = STATE_ALARM;
         g_non_normal_since_ms = uptime_ms();  /* ensure alarm lasts MIN_ALARM_DURATION_MS */
         log_event(cfg, "INFO", "demo alarm triggered");
+    } else if (!strcmp(cmd, "set_config")) {
+        /* parse "key" and "value" fields */
+        char key[64] = {0};
+        int val = 0, has_val = 0;
+        const char *kp = strstr(buf, "\"key\"");
+        const char *vp = strstr(buf, "\"value\"");
+        if (kp) {
+            kp = strchr(kp, ':');
+            if (kp) { kp++; while (*kp == ' ' || *kp == '"') kp++;
+                int i = 0;
+                while (*kp && *kp != '"' && i < 63) key[i++] = *kp++;
+                key[i] = '\0'; }
+        }
+        if (vp) {
+            vp = strchr(vp, ':');
+            if (vp) { vp++; while (*vp == ' ') vp++; val = atoi(vp); has_val = 1; }
+        }
+        if (key[0] && has_val) {
+            /* update in-memory config */
+            if      (!strcmp(key, "sample_interval_ms"))       cfg->interval_ms       = val;
+            else if (!strcmp(key, "als_low_threshold"))        cfg->als_low_th        = val;
+            else if (!strcmp(key, "ps_warning_threshold"))     cfg->ps_warning_th     = val;
+            else if (!strcmp(key, "ps_alarm_threshold"))       cfg->ps_alarm_th       = val;
+            else if (!strcmp(key, "motion_warning_threshold")) cfg->motion_warning_th = val;
+            else if (!strcmp(key, "motion_alarm_threshold"))   cfg->motion_alarm_th   = val;
+            else key[0] = '\0';  /* unknown key */
+            if (key[0]) {
+                /* persist to config file */
+                mkdir(CONFIG_DIR, 0755);
+                FILE *f = fopen(CONFIG_PATH, "w");
+                if (f) {
+                    fprintf(f,
+                        "{\n"
+                        "  \"sample_interval_ms\": %d,\n"
+                        "  \"als_low_threshold\": %d,\n"
+                        "  \"ps_warning_threshold\": %d,\n"
+                        "  \"ps_alarm_threshold\": %d,\n"
+                        "  \"motion_warning_threshold\": %d,\n"
+                        "  \"motion_alarm_threshold\": %d,\n"
+                        "  \"buzzer_enable\": true,\n"
+                        "  \"led_enable\": true,\n"
+                        "  \"log_enable\": true\n"
+                        "}\n",
+                        cfg->interval_ms,
+                        cfg->als_low_th,
+                        cfg->ps_warning_th,
+                        cfg->ps_alarm_th,
+                        cfg->motion_warning_th,
+                        cfg->motion_alarm_th);
+                    fclose(f);
+                    printf("[INFO] config updated: %s=%d\n", key, val);
+                    log_event(cfg, "INFO", "config updated via cmd");
+                }
+            }
+        }
+    } else if (!strcmp(cmd, "delete_old_alarms")) {
+        /* parse "keep" field — keep newest N records */
+        int keep = 100;
+        const char *kp = strstr(buf, "\"keep\"");
+        if (kp) {
+            kp = strchr(kp, ':');
+            if (kp) { kp++; while (*kp == ' ') kp++; keep = atoi(kp);
+                if (keep <= 0) keep = 100; }
+        }
+        if (g_db && keep > 0) {
+            char sql[256];
+            snprintf(sql, sizeof(sql),
+                     "DELETE FROM alarm_events WHERE id NOT IN "
+                     "(SELECT id FROM alarm_events ORDER BY id DESC LIMIT %d)",
+                     keep);
+            char *err = NULL;
+            int rc = sqlite3_exec(g_db, sql, NULL, NULL, &err);
+            if (rc == SQLITE_OK) {
+                printf("[INFO] deleted old alarms, kept newest %d\n", keep);
+                log_event(cfg, "INFO", "old alarm records purged");
+            } else {
+                fprintf(stderr, "[ERR] delete alarms: %s\n", err ? err : "unknown");
+                if (err) sqlite3_free(err);
+            }
+        }
     }
 
     unlink(CMD_JSON_PATH);

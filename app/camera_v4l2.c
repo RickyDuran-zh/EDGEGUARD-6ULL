@@ -72,8 +72,8 @@ struct camera_ctx *camera_open(const char *device,
     if (!ctx) return NULL;
     ctx->fd = -1;
 
-    /* 1. open device */
-    ctx->fd = open(device, O_RDWR | O_NONBLOCK);
+    /* 1. open device — blocking mode: DQBUF will wait for a frame */
+    ctx->fd = open(device, O_RDWR);
     if (ctx->fd < 0) {
         set_error(ctx, "open(%s): %s", device, strerror(errno));
         camera_close(ctx);
