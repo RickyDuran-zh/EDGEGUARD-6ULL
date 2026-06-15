@@ -131,19 +131,27 @@ int face_detect_run(const uint8_t *jpeg_data, int len, int *face_count)
         return -1;
     }
 
-    /* Resize + normalize */
-    ncnn::Mat in = ncnn::Mat::from_pixels_resize(
-        rgb, ncnn::Mat::PIXEL_RGB, w, h, MODEL_INPUT_W, MODEL_INPUT_H);
+    /* Resize: ncnn >= 2022 uses from_pixels + resize_bilinear */
+    ncnn::Mat in = ncnn::Mat::from_pixels(rgb, ncnn::Mat::PIXEL_RGB, w, h);
     stbi_image_free(rgb);
-    in.substract_mean_normalize(127.5f, 0.007843f);
+
+    ncnn::Mat in_resized;
+    ncnn::resize_bilinear(in, in_resized, MODEL_INPUT_W, MODEL_INPUT_H);
+
+    /* Normalize [0,255] → [-1,1]: (pixel - 127.5) / 127.5 */
+    const float mean_vals[3] = { 127.5f, 127.5f, 127.5f };
+    const float norm_vals[3] = { 1.0f / 127.5f, 1.0f / 127.5f, 1.0f / 127.5f };
+    in_resized.substract_mean_normalize(mean_vals, norm_vals);
 
     /* Inference */
     ncnn::Extractor ex = g_net->create_extractor();
-    ex.input("input", in);
+    ex.input("input", in_resized);
 
     ncnn::Mat scores, boxes;
-    ex.extract("scores", scores);
-    ex.extract("boxes",  boxes);
+    if (ex.extract("scores", scores) != 0 || ex.extract("boxes", boxes) != 0) {
+        fprintf(stderr, "[face_detect] extract failed — check model layer names\n");
+        return -1;
+    }
 
     int num_boxes = scores.h;
     if (num_boxes <= 0 || boxes.h != num_boxes) return 0;

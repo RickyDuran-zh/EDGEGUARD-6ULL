@@ -2,6 +2,8 @@
 
 基于 i.MX6ULL-S1 Pro 开发板的边缘安全监控系统。
 
+> **当前版本**：P1 摄像头集成已部署验证通过 | P2 人脸检测代码就绪，等待 ncnn 交叉编译 | 最后更新：2026-06-13
+
 ---
 
 ## 项目定位
@@ -28,13 +30,17 @@ EdgeGuard-6ULL/
 │   ├── edgeguard_httpd.c       # HTTP 服务器：Web仪表板、REST API、SSE推送、SQLite查询、Basic Auth
 │   ├── edgeguard_mqttd.c       # MQTT客户端：遥测上报、断线重连
 │   ├── sqlite3.c / sqlite3.h   # SQLite 3.53.1 amalgamation（嵌入式数据库，编译进二进制）
-│   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 双缓冲）
+│   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 双缓冲, 阻塞模式）
 │   ├── edgeguard_visiond.c     # 视觉守护进程：定时拍照、运动检测、写 vision.json
-│   └── Makefile                # 交叉编译 makefile（4个target）
+│   ├── face_detect.h           # 人脸检测 C/C++ 桥接接口（extern "C"）
+│   ├── face_detect.c           # 纯 C stub 实现（P1，零 AI 依赖，总是返回 face_count=0）
+│   ├── face_detect.cpp         # ncnn 完整推理实现（P2，Ultra-Light-Face-Detector + NMS）
+│   └── Makefile                # 交叉编译 makefile（5个target + C/C++ 分离编译）
 │
 ├── ui/                         # Qt5 本地触摸屏界面（C++）
 │   ├── main.cpp                # 入口：QApplication + showFullScreen()
-│   ├── mainwindow.h / .cpp     # 主窗口：6页 QStackedWidget + 触摸滑动 + JSON解析 + 登录
+│   ├── loginpage.h / .cpp      # 登录页：虚拟键盘 + 3次失败锁定30s + 人脸登录入口(P3预留)
+│   ├── mainwindow.h / .cpp     # 主窗口：7页 QStackedWidget + 触摸滑动 + 顶栏Logout + JSON解析
 │   ├── EdgeGuardUI.pro         # qmake 工程文件
 │   ├── run_linuxfb.sh          # 板子启动脚本
 │   └── status_sample.json      # 测试用示例 JSON
@@ -122,10 +128,11 @@ EdgeGuard-6ULL/
 |------|--------|--------|------|
 | `/tmp/edgeguard_status.json` | sensor_hubd | HTTP / MQTT / UI | 实时状态（原子写: .tmp → rename） |
 | `/tmp/edgeguard_cmd.json` | HTTP / UI | sensor_hubd | 命令（mute/ack/demo，读取后删除） |
-| `/tmp/edgeguard_vision.json` | edgeguard_visiond | sensor_hubd / HTTP / UI | 摄像头状态 + 运动/人脸检测结果 |
+| `/tmp/edgeguard_vision.json` | edgeguard_visiond | sensor_hubd / HTTP / UI | 摄像头状态 + 运动/人脸检测结果（2000ms刷新，原子写） |
 | `/var/log/edgeguard/alarms.db` | sensor_hubd | HTTP | 报警历史（SQLite WAL模式） |
-| `/var/log/edgeguard/snapshots/` | edgeguard_visiond | HTTP | 报警 JPEG 快照 |
-| `/etc/edgeguard/config.json` | 管理员 | sensor_hubd | 传感器阈值配置 |
+| `/var/log/edgeguard/snapshots/` | edgeguard_visiond | HTTP | 报警 JPEG 快照（最多50张，超出自动清理） |
+| `/etc/edgeguard/config.json` | sensor_hubd | sensor_hubd | 传感器阈值配置（首次启动自动生成，Web Settings 即时生效） |
+| `/etc/edgeguard/users.json` | 管理员 | Qt UI | LCD 登录用户凭证（可选，不存在则用默认值） |
 
 ---
 
@@ -176,21 +183,57 @@ EdgeGuard-6ULL/
 
 ### edgeguard-ui — Qt5 触摸屏界面
 
-- **6 页**：Login / Dashboard / Sensors / Alarms / Settings / System / Vision
+- **7 页**：Login / Dashboard / Sensors / Alarms / Settings / System / Vision
+- **布局**：左侧166px侧边栏（6个导航按钮 + Brand）+ 顶栏Logout按钮 + 右侧内容区
+- **顶栏**：登录页隐藏，认证后显示 "EdgeGuard 6ULL" 品牌 + Logout 按钮
 - **触摸**：通过 Qt linuxfb QPA 的 QMouseEvent 实现上下滑动切页、点击侧边栏切页
+- **登录页**：滑动被完全禁用，只能通过按钮或虚拟键盘操作
+- **虚拟键盘**：QWERTY 全键盘 + Shift/Backspace/Toggle/Space/.com + Enter 自动跳转密码框
 - **键盘**：按键 1-6 切页、Esc 退出
-- **Demo 模式**：`--demo` 参数模拟传感器数据
-- **登录认证**：用户名/密码 + 虚拟键盘，3 次失败锁定 30 秒
+- **Demo 模式**：`--demo` 参数模拟传感器数据（含视觉 mock 数据）
+- **登录认证**：用户名/密码 + 虚拟键盘，3 次失败锁定 30 秒，支持自定义 `/etc/edgeguard/users.json`
+- **Vision 页**：显示 Camera 在线状态 / Motion 检测 / Face Count / Inference 耗时 / 最新快照路径
 
-### edgeguard_visiond — USB 摄像头视觉守护进程（P1 阶段）
+### edgeguard_visiond — USB 摄像头视觉守护进程（P1 ✅ 已部署）
 
-- **周期**：2000ms（可配置）
+- **周期**：2000ms（可配置：`--interval <ms>`）
 - **摄像头**：USB UVC (Logitech B525)，V4L2 MJPEG 640×480 捕获
-- **运动检测**：JPEG 帧大小变化启发式检测（阈值 15%）
-- **输出**：`/tmp/edgeguard_vision.json` + `/var/log/edgeguard/snapshots/*.jpg`
-- **自动恢复**：摄像头拔出/插入自动重连
-- **内核依赖**：`CONFIG_USB_VIDEO_CLASS=y`（uvcvideo.ko）
+- **运动检测**：JPEG 帧文件大小变化启发式检测（阈值 15%），零 AI 依赖
+- **快照留存**：每帧保存到 `/var/log/edgeguard/snapshots/`，**最多保留 50 张**（超出自动删最旧）
+- **自动恢复**：摄像头拔出/插入自动重连（hotplug），掉线期间写 `camera_online: false`
+- **内核依赖**：`CONFIG_USB_VIDEO_CLASS=m`（uvcvideo.ko），B525 即插即用
 - **详细方案**：参见 `plan/AI_CAMERA_PLAN.md`
+
+**输出格式** (`/tmp/edgeguard_vision.json`)：
+```json
+{
+  "camera_online": true,
+  "motion_detected": false,
+  "face_count": 0,
+  "snapshot_path": "/var/log/edgeguard/snapshots/20260613_120000.jpg",
+  "inference_ms": 35,
+  "timestamp": "2026-06-13 12:00:00",
+  "face_verify_result": null
+}
+```
+
+**运动检测触发状态机**：
+```
+motion_detected = true → sensor_hubd 状态机 NORMAL → WARNING（黄灯闪烁）
+face_count > 0        → sensor_hubd 状态机 WARNING → ALARM（红灯+蜂鸣器）  【P2 生效】
+```
+
+### face_detect — 人脸检测模块（P2 代码就绪，等待 ncnn）
+
+- **双模式架构**：
+  - **Stub 模式**（当前）：`face_detect.c` 纯 C，零依赖，总是返回 `face_count=0`，P1 功能不受影响
+  - **NCNN 模式**：`face_detect.cpp`（`-DEDGEGUARD_USE_NCNN`），Ultra-Light-Face-Detector-1MB 模型推理
+- **接口**：纯 C 接口（`extern "C"`），visiond 直接调用，不感知底层实现
+- **推理流程**：JPEG → stb_image 解码 RGB → 缩放 320×240 → ncnn 推理 → NMS → face_count
+- **性能预估**：~300-600ms/帧（Cortex-A7 @ 800MHz + NEON），仅在运动触发时运行，节省 CPU
+- **模型文件**：`/etc/edgeguard/models/ultra_face.param` + `ultra_face.bin`（int8 量化 ~300KB）
+- **编译命令**：`make edgeguard_visiond_face NCNN_DIR=/path/to/ncnn STB_DIR=/path/to/stb`
+- **状态**：代码完成 ✅ | ncnn 交叉编译待做 | 模型文件待下载
 
 ---
 
@@ -230,9 +273,13 @@ bash scripts/sync_to_vm.sh
 cd ~/Desktop/EdgeGuard-6ULL/EdgeGard-6ULL/app
 make all
 # 产物:
-#   sensor_hubd        — 核心守护进程（含 SQLite）
-#   edgeguard_httpd    — HTTP 服务器（含 SQLite）
-#   edgeguard_mqttd    — MQTT 客户端
+#   sensor_hubd          — 核心守护进程（含 SQLite）
+#   edgeguard_httpd      — HTTP 服务器（含 SQLite）
+#   edgeguard_mqttd      — MQTT 客户端
+#   edgeguard_visiond    — 视觉守护进程（P1，含 face_detect stub）
+
+# P2 人脸检测版（需要先交叉编译 ncnn + 下载 stb_image.h）：
+# make edgeguard_visiond_face NCNN_DIR=/home/user/ncnn STB_DIR=/home/user/stb
 ```
 
 ### 编译 UI（在 VM 上）
@@ -248,7 +295,7 @@ make
 
 ```bash
 # 拷贝二进制到板子
-scp app/sensor_hubd app/edgeguard_httpd app/edgeguard_mqttd root@192.168.10.2:/usr/local/bin/
+scp app/sensor_hubd app/edgeguard_httpd app/edgeguard_mqttd app/edgeguard_visiond root@192.168.10.2:/imx6ull/app/
 scp ui/edgeguard-ui root@192.168.10.2:/imx6ull/ui/
 
 # 拷贝 systemd 服务文件
@@ -256,7 +303,13 @@ scp scripts/*.service root@192.168.10.2:/etc/systemd/system/
 
 # 在板子上安装并启动所有服务
 ssh root@192.168.10.2
-cd /imx6ull/scripts && chmod +x install_services.sh && ./install_services.sh
+systemctl daemon-reload
+systemctl enable edgeguard edgeguard-httpd edgeguard-mqttd edgeguard-visiond edgeguard-ui
+systemctl restart edgeguard edgeguard-httpd edgeguard-mqttd edgeguard-visiond edgeguard-ui
+
+# 验证视觉模块
+cat /tmp/edgeguard_vision.json | grep camera_online
+ls /var/log/edgeguard/snapshots/ | wc -l
 ```
 
 ### 网络配置（网线直连 PC）
@@ -271,10 +324,12 @@ PC:   IPv4 属性 → 192.168.10.1 / 255.255.255.0
 
 | 入口 | 地址 | 说明 |
 |------|------|------|
-| Web Dashboard | `http://192.168.10.2:8080` | PC 浏览器打开 |
-| API 状态查询 | `curl http://192.168.10.2:8080/api/status` | JSON 格式 |
-| 报警历史 | `curl http://192.168.10.2:8080/api/alarms?limit=10` | SQLite 查询 |
-| LCD 触摸屏 | 板子本地 | Qt5 linuxfb 界面 |
+| Web Dashboard | `http://192.168.10.2:8080` | PC 浏览器打开，4页SPA（Dashboard/Alarms/Camera/Settings） |
+| 摄像头实时画面 | `http://192.168.10.2:8080/api/snapshot` | 最新 JPEG 快照，image/jpeg 直出 |
+| 视觉检测结果 | `curl http://192.168.10.2:8080/api/vision` | JSON 格式（motion/face） |
+| API 状态查询 | `curl http://192.168.10.2:8080/api/status` | 完整传感器+视觉 JSON |
+| 报警历史 | `curl http://192.168.10.2:8080/api/alarms?limit=10` | SQLite 查询，支持分页 |
+| LCD 触摸屏 | 板子本地 | Qt5 linuxfb 界面，7页 |
 | MQTT 订阅 | `mosquitto_sub -t 'edgeguard/#' -v` | PC 端运行 |
 
 ### 命令操作
@@ -315,27 +370,33 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 ## 状态机
 
 ```
-                    ┌─────────────────────────────┐
-                    │        NORMAL (绿灯常亮)      │
-                    └───┬─────────┬─────────┬─────┘
-       运动>8000        │   光<80  │  接近>120│
-       接近>120         │         │         │
-          ↓             ↓         ↓         │
-   ┌──────────────────────────┐            │
-   │  WARNING (黄灯 500ms闪烁)  │←──────────┘
-   └──────────┬───────────────┘
-     运动>15000│  接近>220
-              ↓
-   ┌──────────────────────────┐
-   │  ALARM (红灯 250ms快闪+蜂鸣)│
-   └──────────┬───────────────┘
-              │ 连续3次传感器读取失败
-              ↓
-   ┌──────────────────────────┐
-   │  FAULT (红灯 1000ms慢闪)    │
-   └──────────────────────────┘
+                         ┌─────────────────────────────┐
+                         │        NORMAL (绿灯常亮)      │
+                         └───┬─────────┬─────────┬─────┘
+            运动>8000        │   光<80  │  接近>120│
+            接近>120         │         │         │
+         视觉运动检测 ════════╝         │         │
+               ↓             ↓         ↓         │
+        ┌──────────────────────────┐            │
+        │  WARNING (黄灯 500ms闪烁)  │←──────────┘
+        └──────────┬───────────────┘
+          运动>15000│  接近>220
+       视觉人脸检测 ═╡  (P2: face_count>0)
+                   ↓
+        ┌──────────────────────────┐
+        │  ALARM (红灯 250ms快闪+蜂鸣)│
+        └──────────┬───────────────┘
+                   │ 连续3次传感器读取失败
+                   ↓
+        ┌──────────────────────────┐
+        │  FAULT (红灯 1000ms慢闪)    │
+        └──────────────────────────┘
 
 非 NORMAL 状态至少持续 2 秒（迟滞），防止传感器数据边界抖动。
+
+视觉联动（P1 已部署）：
+  motion_detected=true → WARNING（与传感器运动/接近检测同级）
+  face_count>0         → ALARM   （P2 ncnn 启用后生效）
 ```
 
 ---
@@ -361,4 +422,7 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 - 修改驱动后需检查：Makefile、compatible 匹配、MODULE_DEVICE_TABLE、probe/remove
 - 内核 API 需兼容 Linux 4.19.35
 - 用户态代码零外部库依赖（仅 libc + pthread + SQLite amalgamation）
+- P1 编译仅需 gcc；P2 需要 g++（C++11）+ ncnn 库
+- face_detect 使用 stub/full 双模式：stub 保证 P1 独立可编译运行，full 模式按需激活
+- 所有 IPC 文件使用原子写（.tmp → rename），避免读者读到半写数据
 - 不要将 SSH 密码、API Key 写入代码
