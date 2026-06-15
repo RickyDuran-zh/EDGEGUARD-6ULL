@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/select.h>
 #include <linux/videodev2.h>
 
 /* ---- internal context ---- */
@@ -191,6 +192,31 @@ struct camera_ctx *camera_open(const char *device,
         return NULL;
     }
 
+    /* 8. flush stale buffers — discard first 2 frames.
+       After USB reset or hotplug, mmap buffers may contain old data
+       from a previous streaming session.  Skipping the first couple
+       of frames guarantees the pipeline starts with live frames. */
+    for (int i = 0; i < 2; i++) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(ctx->fd, &fds);
+        struct timeval tv = { 1, 0 };  /* 1 s timeout */
+
+        int sel = select(ctx->fd + 1, &fds, NULL, NULL, &tv);
+        if (sel <= 0) break;  /* no frame or error → stop flushing */
+
+        struct v4l2_buffer buf;
+        memset(&buf, 0, sizeof(buf));
+        buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+
+        if (xioctl(ctx->fd, VIDIOC_DQBUF, &buf, NULL, "DQBUF-flush") < 0)
+            break;
+
+        if (xioctl(ctx->fd, VIDIOC_QBUF, &buf, NULL, "QBUF-flush") < 0)
+            break;
+    }
+
     return ctx;
 }
 
@@ -199,6 +225,25 @@ int camera_capture(struct camera_ctx *ctx, struct camera_frame *frame)
     if (!ctx || !frame || ctx->fd < 0) return -1;
 
     memset(frame, 0, sizeof(*frame));
+
+    /* wait up to 3 s for a frame — avoids hanging forever if the camera
+       stalls after STREAMON (e.g. after a hotplug or systemd restart) */
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(ctx->fd, &fds);
+    struct timeval tv;
+    tv.tv_sec  = 3;
+    tv.tv_usec = 0;
+
+    int sel = select(ctx->fd + 1, &fds, NULL, NULL, &tv);
+    if (sel < 0) {
+        set_error(ctx, "select: %s", strerror(errno));
+        return -1;
+    }
+    if (sel == 0) {
+        set_error(ctx, "DQBUF timeout — camera stalled");
+        return -1;
+    }
 
     /* dequeue filled buffer */
     struct v4l2_buffer buf;
