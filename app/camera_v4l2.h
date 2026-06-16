@@ -36,6 +36,9 @@ int camera_capture(struct camera_ctx *ctx, struct camera_frame *frame);
 /* Return the last error string (static storage, never NULL). */
 const char *camera_error(struct camera_ctx *ctx);
 
+/* Return the negotiated pixelformat (V4L2_PIX_FMT_*). */
+unsigned int camera_pixelformat(struct camera_ctx *ctx);
+
 /* Close the device and free all resources. */
 void camera_close(struct camera_ctx *ctx);
 

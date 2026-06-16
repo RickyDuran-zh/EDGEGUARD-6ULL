@@ -63,6 +63,11 @@ const char *camera_error(struct camera_ctx *ctx)
     return ctx ? ctx->errmsg : "null context";
 }
 
+unsigned int camera_pixelformat(struct camera_ctx *ctx)
+{
+    return ctx ? ctx->pixelformat : 0;
+}
+
 struct camera_ctx *camera_open(const char *device,
                                unsigned int width,
                                unsigned int height)

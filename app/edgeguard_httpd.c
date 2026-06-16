@@ -1259,8 +1259,18 @@ static void *connection_handler(void *arg)
             const char *lp = strstr(query, "limit=");
             if (lp) { lp += 6; limit = atoi(lp); if (limit <= 0) limit = 50; }
         }
-        char alarms_json[8192];
-        build_alarms_json(alarms_json, sizeof(alarms_json), limit);
+        /* heap alloc — RESP_BUF_SIZE already 32KB on stack (thread stack=64KB) */
+        int abuf_size = RESP_BUF_SIZE - 512;
+        char *alarms_json = malloc(abuf_size);
+        if (!alarms_json) {
+            snprintf(resp, sizeof(resp),
+                     "HTTP/1.1 500\r\nContent-Length: 21\r\n\r\n"
+                     "{\"error\":\"no memory\"}");
+            send_response(client_fd, resp);
+            close(client_fd);
+            return NULL;
+        }
+        build_alarms_json(alarms_json, abuf_size, limit);
         size_t blen = strlen(alarms_json);
         snprintf(resp, sizeof(resp),
                  "HTTP/1.1 200 OK\r\n"
@@ -1271,6 +1281,7 @@ static void *connection_handler(void *arg)
                  "\r\n"
                  "%s", blen, alarms_json);
         send_response(client_fd, resp);
+        free(alarms_json);
         close(client_fd);
         return NULL;
 

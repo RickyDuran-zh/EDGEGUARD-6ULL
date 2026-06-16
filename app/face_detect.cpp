@@ -213,6 +213,13 @@ int face_detect_run(const uint8_t *jpeg_data, int len, int *face_count)
         return -1;
     }
 
+    /* diagnostic: raw RGB pixel values */
+    printf("[face_detect] raw_rgb[0..5]=(%d,%d,%d) (%d,%d,%d)  "
+           "mid=(%d,%d,%d)  corner=(%d,%d,%d)\n",
+           rgb[0], rgb[1], rgb[2], rgb[3], rgb[4], rgb[5],
+           rgb[im_w*im_h/2*3], rgb[im_w*im_h/2*3+1], rgb[im_w*im_h/2*3+2],
+           rgb[(im_w*im_h-1)*3], rgb[(im_w*im_h-1)*3+1], rgb[(im_w*im_h-1)*3+2]);
+
     /* 2. Resize to model input 320×240 */
     ncnn::Mat in = ncnn::Mat::from_pixels(rgb, ncnn::Mat::PIXEL_RGB, im_w, im_h);
     stbi_image_free(rgb);
@@ -220,13 +227,20 @@ int face_detect_run(const uint8_t *jpeg_data, int len, int *face_count)
     ncnn::Mat in_resized;
     ncnn::resize_bilinear(in, in_resized, MODEL_INPUT_W, MODEL_INPUT_H);
 
-    /* 3. Normalise [0,255] → [0, 1].
-       RFB-320 (vision-RFB) was trained with zero-centred [0,1] range;
-       [-1,1] normalisation kills detection scores.  Keep BGR as ncnn
-       PIXEL_BGR matches the OpenCV-based training pipeline. */
-    const float mean_vals[3] = { 0.0f, 0.0f, 0.0f };
-    const float norm_vals[3] = { 1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f };
+    /* 3. Normalise [0,255] → [-1, 1].
+       In this ncnn version, substract_mean_normalize converts the Mat
+       from uint8 to float32 IN PLACE (returns void). */
+    const float mean_vals[3] = { 127.5f, 127.5f, 127.5f };
+    const float norm_vals[3] = { 1.0f / 127.5f, 1.0f / 127.5f, 1.0f / 127.5f };
+    printf("[face_detect] before norm: elemsize=%zu  c=%d h=%d w=%d\n",
+           in_resized.elemsize, in_resized.c, in_resized.h, in_resized.w);
     in_resized.substract_mean_normalize(mean_vals, norm_vals);
+    printf("[face_detect] after norm:  elemsize=%zu  "
+           "sample[0..4]=%.4f %.4f %.4f %.4f %.4f\n",
+           in_resized.elemsize,
+           in_resized.channel(0)[0], in_resized.channel(0)[1],
+           in_resized.channel(0)[2], in_resized.channel(0)[3],
+           in_resized.channel(0)[4]);
 
     /* 4. ncnn inference */
     ncnn::Extractor ex = g_net->create_extractor();

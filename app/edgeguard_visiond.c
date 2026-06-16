@@ -193,10 +193,13 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        printf("[visiond] camera opened  %ux%u  pixelformat=0x%08x\n",
+        printf("[visiond] camera opened  %ux%u  pixelformat=0x%08x (%c%c%c%c)\n",
                width, height,
-               /* reading pixelformat from context is private; just log */
-               0);
+               camera_pixelformat(cam),
+               (char)(camera_pixelformat(cam) & 0xFF),
+               (char)((camera_pixelformat(cam) >> 8) & 0xFF),
+               (char)((camera_pixelformat(cam) >> 16) & 0xFF),
+               (char)((camera_pixelformat(cam) >> 24) & 0xFF));
 
         int camera_online = 1;
         int motion_detected = 0;
@@ -214,6 +217,15 @@ int main(int argc, char *argv[])
                         camera_error(cam));
                 camera_online = 0;
                 break;
+            }
+
+            /* validate JPEG magic */
+            if (frame.size < 4 || frame.data[0] != 0xFF || frame.data[1] != 0xD8) {
+                fprintf(stderr, "[visiond] NOT JPEG! magic=%02X%02X  "
+                        "size=%zu  pixelformat=0x%08X\n",
+                        frame.size >= 2 ? frame.data[0] : 0,
+                        frame.size >= 2 ? frame.data[1] : 0,
+                        frame.size, camera_pixelformat(cam));
             }
 
             clock_gettime(CLOCK_MONOTONIC, &t1);

@@ -132,12 +132,12 @@ void LoginPage::onLoginClicked()
         emit loginSuccess();
     } else {
         m_attempts++;
-        m_errorLabel->setText(QString("Login failed (%1/%2)").arg(m_attempts).arg(kMaxAttempts));
+        m_errorLabel->setText(QString("登录失败 (%1/%2)").arg(m_attempts).arg(kMaxAttempts));
         m_passEdit->clear();
         if (m_attempts >= kMaxAttempts) {
             m_locked = true;
             m_loginBtn->setEnabled(false);
-            m_lockLabel->setText(QString("Locked %1s...").arg(kLockSeconds));
+            m_lockLabel->setText(QString("已锁定 %1秒...").arg(kLockSeconds));
             m_lockLabel->show();
             m_lockTimer->start(kLockSeconds * 1000);
         }
@@ -166,7 +166,7 @@ void LoginPage::buildUi()
     root->addSpacing(4);
 
     // Username
-    root->addWidget(new QLabel("Username", this));
+    root->addWidget(new QLabel("用户名", this));
     m_userEdit = new QLineEdit(this);
     m_userEdit->setPlaceholderText("rickyduran");
     m_userEdit->setFixedHeight(32);
@@ -174,7 +174,7 @@ void LoginPage::buildUi()
     root->addSpacing(2);
 
     // Password
-    root->addWidget(new QLabel("Password", this));
+    root->addWidget(new QLabel("密码", this));
     m_passEdit = new QLineEdit(this);
     m_passEdit->setEchoMode(QLineEdit::Password);
     m_passEdit->setPlaceholderText("••••");
@@ -226,7 +226,7 @@ void LoginPage::buildUi()
     for (int c=0;c<9;c++) add(3,c+1,1,row3[c],ks,c<7);
     add(4,0,1,"⇩",ms,false);  // toggle field
     add(4,1,1,"@",ms,false);
-    add(4,2,4,"Space",ms,false);
+    add(4,2,4,"空格",ms,false);
     add(4,6,1,"_",ms,false);
     add(4,7,1,"/",ms,false);
     add(4,8,1,".com",ms,false);
@@ -244,13 +244,13 @@ void LoginPage::buildUi()
 
     // Buttons row
     QHBoxLayout *btnRow = new QHBoxLayout(); btnRow->setSpacing(10);
-    m_loginBtn = new QPushButton("Sign In", this);
+    m_loginBtn = new QPushButton("登录", this);
     m_loginBtn->setFixedHeight(36);
     m_loginBtn->setStyleSheet(R"(QPushButton{background:#1f6feb;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:700;}QPushButton:pressed{background:#2b80ff;}QPushButton:disabled{background:#243b58;color:#6a7d94;})");
     connect(m_loginBtn, &QPushButton::clicked, this, &LoginPage::onLoginClicked);
     btnRow->addWidget(m_loginBtn, 3);
 
-    QPushButton *demoBtn = new QPushButton("Demo", this);
+    QPushButton *demoBtn = new QPushButton("演示", this);
     demoBtn->setFixedHeight(36);
     demoBtn->setFocusPolicy(Qt::NoFocus);
     demoBtn->setStyleSheet(R"(QPushButton{background:transparent;border:1px solid #263b58;border-radius:8px;color:#8fb3d9;font-size:13px;font-weight:600;}QPushButton:pressed{background:#1a2d45;})");

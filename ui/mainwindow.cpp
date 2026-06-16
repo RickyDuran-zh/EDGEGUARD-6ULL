@@ -186,7 +186,7 @@ void MainWindow::buildUi()
     topLayout->addWidget(topBrand);
     topLayout->addStretch(1);
 
-    m_logoutBtn = new QPushButton("Logout", m_topBar);
+    m_logoutBtn = new QPushButton("登出", m_topBar);
     m_logoutBtn->setFocusPolicy(Qt::NoFocus);
     m_logoutBtn->setFixedSize(72, 28);
     m_logoutBtn->setStyleSheet(
@@ -254,11 +254,11 @@ QWidget *MainWindow::buildSidebar()
     brand->setStyleSheet("font-size: 24px; font-weight: 900; color: #ffffff; line-height: 1.1;");
     layout->addWidget(brand);
 
-    QLabel *sub = makeSmallText("Local Monitor UI");
+    QLabel *sub = makeSmallText("本地监控界面");
     layout->addWidget(sub);
     layout->addSpacing(14);
 
-    const QStringList names = {"1  Dashboard", "2  Sensors", "3  Alarms", "4  Settings", "5  System", "6  Vision"};
+    const QStringList names = {"1  仪表盘", "2  传感器", "3  报警", "4  设置", "5  系统", "6  摄像头"};
     for (int i = 0; i < names.size(); ++i) {
         QPushButton *btn = new QPushButton(names[i], side);
         btn->setObjectName("NavButton");
@@ -283,9 +283,9 @@ QWidget *MainWindow::buildDashboardPage()
     layout->setSpacing(12);
 
     QHBoxLayout *top = new QHBoxLayout();
-    top->addWidget(makeTitle("Dashboard"));
+    top->addWidget(makeTitle("仪表盘"));
     top->addStretch(1);
-    m_modeBadge = new QLabel("STATUS", page);
+    m_modeBadge = new QLabel("状态", page);
     m_modeBadge->setObjectName("ModeBadge");
     top->addWidget(m_modeBadge);
     layout->addLayout(top);
@@ -293,16 +293,16 @@ QWidget *MainWindow::buildDashboardPage()
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
 
-    grid->addWidget(makeCard("System State", &m_stateLabel), 0, 0);
-    grid->addWidget(makeCard("Alarm Reason", &m_alarmReasonLabel), 0, 1);
-    grid->addWidget(makeCard("ALS Light", &m_alsLabel), 1, 0);
-    grid->addWidget(makeCard("Proximity", &m_psLabel), 1, 1);
-    grid->addWidget(makeCard("Motion Delta", &m_motionLabel), 2, 0);
-    grid->addWidget(makeCard("LED / Buzzer", &m_ledLabel), 2, 1);
+    grid->addWidget(makeCard("系统状态", &m_stateLabel), 0, 0);
+    grid->addWidget(makeCard("报警原因", &m_alarmReasonLabel), 0, 1);
+    grid->addWidget(makeCard("环境光", &m_alsLabel), 1, 0);
+    grid->addWidget(makeCard("接近感应", &m_psLabel), 1, 1);
+    grid->addWidget(makeCard("运动增量", &m_motionLabel), 2, 0);
+    grid->addWidget(makeCard("LED / 蜂鸣器", &m_ledLabel), 2, 1);
 
     layout->addLayout(grid, 1);
 
-    m_timeLabel = makeSmallText("Last update: --");
+    m_timeLabel = makeSmallText("最后更新: --");
     layout->addWidget(m_timeLabel);
 
     return page;
@@ -313,14 +313,14 @@ QWidget *MainWindow::buildSensorPage()
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("Sensor Data"));
+    layout->addWidget(makeTitle("传感器数据"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
-    grid->addWidget(makeCard("MPU6050 Accel", &m_accelLabel), 0, 0);
-    grid->addWidget(makeCard("MPU6050 Gyro", &m_gyroLabel), 0, 1);
+    grid->addWidget(makeCard("MPU6050 加速度", &m_accelLabel), 0, 0);
+    grid->addWidget(makeCard("MPU6050 陀螺仪", &m_gyroLabel), 0, 1);
     grid->addWidget(makeCard("AP3216C", &m_ap3216cLabel), 1, 0);
-    grid->addWidget(makeCard("Temperature", &m_rawTempLabel), 1, 1);
+    grid->addWidget(makeCard("温度", &m_rawTempLabel), 1, 1);
     layout->addLayout(grid, 1);
 
     QHBoxLayout *onlineRow = new QHBoxLayout();
@@ -339,27 +339,27 @@ QWidget *MainWindow::buildAlarmPage()
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("Alarm Center"));
+    layout->addWidget(makeTitle("报警中心"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
-    grid->addWidget(makeCard("Current Alarm", &m_alarmStateLabel), 0, 0);
-    grid->addWidget(makeCard("Alarm Count", &m_alarmCountLabel), 0, 1);
-    grid->addWidget(makeCard("Last Alarm", &m_lastAlarmLabel), 1, 0, 1, 2);
+    grid->addWidget(makeCard("当前报警", &m_alarmStateLabel), 0, 0);
+    grid->addWidget(makeCard("报警次数", &m_alarmCountLabel), 0, 1);
+    grid->addWidget(makeCard("上次报警", &m_lastAlarmLabel), 1, 0, 1, 2);
     layout->addLayout(grid);
 
     /* Action buttons */
     QHBoxLayout *btnRow = new QHBoxLayout();
     btnRow->setSpacing(16);
 
-    m_muteBtn = new QPushButton("Mute Buzzer", page);
+    m_muteBtn = new QPushButton("静音蜂鸣器", page);
     m_muteBtn->setObjectName("ActionButton");
     m_muteBtn->setFocusPolicy(Qt::NoFocus);
     m_muteBtn->setMinimumHeight(42);
     connect(m_muteBtn, &QPushButton::clicked, this, &MainWindow::onMuteClicked);
     btnRow->addWidget(m_muteBtn);
 
-    m_ackBtn = new QPushButton("Acknowledge", page);
+    m_ackBtn = new QPushButton("确认报警", page);
     m_ackBtn->setObjectName("ActionButton");
     m_ackBtn->setFocusPolicy(Qt::NoFocus);
     m_ackBtn->setMinimumHeight(42);
@@ -377,12 +377,12 @@ QWidget *MainWindow::buildSettingsPage()
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("Settings Preview"));
+    layout->addWidget(makeTitle("设置预览"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
-    grid->addWidget(makeCard("Sample Interval", &m_intervalLabel), 0, 0);
-    grid->addWidget(makeCard("Thresholds", &m_thresholdLabel), 0, 1);
+    grid->addWidget(makeCard("采样间隔", &m_intervalLabel), 0, 0);
+    grid->addWidget(makeCard("阈值", &m_thresholdLabel), 0, 1);
     layout->addLayout(grid, 1);
     return page;
 }
@@ -392,14 +392,14 @@ QWidget *MainWindow::buildSystemPage()
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("System"));
+    layout->addWidget(makeTitle("系统"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
-    grid->addWidget(makeCard("Board IP", &m_ipLabel), 0, 0);
-    grid->addWidget(makeCard("Uptime (sec)", &m_uptimeLabel), 0, 1);
+    grid->addWidget(makeCard("板卡IP", &m_ipLabel), 0, 0);
+    grid->addWidget(makeCard("运行时间(秒)", &m_uptimeLabel), 0, 1);
     grid->addWidget(makeCard("sensor_hubd", &m_serviceLabel), 1, 0);
-    grid->addWidget(makeCard("Network Link", &m_networkLabel), 1, 1);
+    grid->addWidget(makeCard("网络连接", &m_networkLabel), 1, 1);
     layout->addLayout(grid, 1);
     return page;
 }
@@ -409,16 +409,16 @@ QWidget *MainWindow::buildVisionPage()
     QWidget *page = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->setSpacing(12);
-    layout->addWidget(makeTitle("Camera Vision"));
+    layout->addWidget(makeTitle("摄像头"));
 
     QGridLayout *grid = new QGridLayout();
     grid->setSpacing(12);
-    grid->addWidget(makeCard("Camera",      &m_camOnlineLabel,    "OFFLINE"), 0, 0);
-    grid->addWidget(makeCard("Motion",      &m_camMotionLabel,    "--"),      0, 1);
-    grid->addWidget(makeCard("Face Count",  &m_camFacesLabel,     "0"),       1, 0);
-    grid->addWidget(makeCard("Inference",   &m_camInferenceLabel, "--"),      1, 1);
+    grid->addWidget(makeCard("摄像头",      &m_camOnlineLabel,    "OFFLINE"), 0, 0);
+    grid->addWidget(makeCard("运动检测",      &m_camMotionLabel,    "--"),      0, 1);
+    grid->addWidget(makeCard("人脸数量",  &m_camFacesLabel,     "0"),       1, 0);
+    grid->addWidget(makeCard("推理耗时",   &m_camInferenceLabel, "--"),      1, 1);
     {
-        QWidget *snapCard = makeCard("Latest Snapshot", &m_camSnapshotLabel, "--");
+        QWidget *snapCard = makeCard("最新快照", &m_camSnapshotLabel, "--");
         grid->addWidget(snapCard, 2, 0, 1, 2);
     }
     layout->addLayout(grid, 1);
@@ -705,7 +705,7 @@ void MainWindow::applyServiceLost()
 {
     m_consecutiveFailures++;
     if (m_consecutiveFailures > kMaxFailures) {
-        m_modeBadge->setText("SERVICE LOST");
+        m_modeBadge->setText("服务断开");
         m_modeBadge->setStyleSheet("background: #ff5c5c; color: #ffffff; "
                                    "border-radius: 12px; padding: 5px 12px; "
                                    "font-size: 12px; font-weight: 700;");
@@ -728,7 +728,7 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
     QJsonObject sys    = obj.value("system").toObject();
 
     /* ---- Dashboard ---- */
-    m_modeBadge->setText(demo ? "DEMO" : "LIVE");
+    m_modeBadge->setText(demo ? "演示" : "运行中");
     m_modeBadge->setStyleSheet("");  /* reset to default */
 
     m_stateLabel->setText(state);
@@ -743,10 +743,10 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
         qint64 ts_ms = obj.value("timestamp_ms").toVariant().toLongLong();
         if (ts_ms > 0) {
             qint64 secs = ts_ms / 1000;
-            m_timeLabel->setText(QString("Data age: %1 s ago")
+            m_timeLabel->setText(QString("数据延迟: %1 秒前")
                                  .arg(QDateTime::currentSecsSinceEpoch() - secs));
         } else {
-            m_timeLabel->setText("Last update: " +
+            m_timeLabel->setText("最后更新: " +
                                  QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
         }
     }
@@ -773,9 +773,9 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
             m_rawTempLabel->setText(valueToString(mpu, "temp", "--"));
     }
     m_mpuOnlineLabel->setText(QString("MPU6050: %1")
-                              .arg(mpu.value("online").toBool() ? "ONLINE" : "OFFLINE"));
+                              .arg(mpu.value("online").toBool() ? "在线" : "离线"));
     m_apOnlineLabel->setText(QString("AP3216C: %1")
-                              .arg(ap3216.value("online").toBool() ? "ONLINE" : "OFFLINE"));
+                              .arg(ap3216.value("online").toBool() ? "在线" : "离线"));
 
     /* ---- Alarms ---- */
     m_alarmStateLabel->setText(state + "\n" + reason);
@@ -796,8 +796,8 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
             th += QString("Motion alarm: %1").arg(cfg.value("motion_alarm_threshold").toInt(15000));
             m_thresholdLabel->setText(th);
         } else {
-            m_intervalLabel->setText("500 ms (default)");
-            m_thresholdLabel->setText("Waiting for sensor_hubd...");
+            m_intervalLabel->setText("500毫秒(默认)");
+            m_thresholdLabel->setText("等待sensor_hubd服务...");
         }
     }
 
@@ -816,7 +816,7 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
         if (nf.open(QIODevice::ReadOnly)) {
             m_networkLabel->setText("eth0 " + QString::fromUtf8(nf.readAll()).trimmed());
         } else {
-            m_networkLabel->setText("eth0 unknown");
+            m_networkLabel->setText("eth0 未知");
         }
     }
 
@@ -825,14 +825,14 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
         QJsonObject vision = obj.value("vision").toObject();
         if (m_camOnlineLabel) {
             bool online = vision.value("camera_online").toBool();
-            m_camOnlineLabel->setText(online ? "ONLINE" : "OFFLINE");
+            m_camOnlineLabel->setText(online ? "在线" : "离线");
             m_camOnlineLabel->setStyleSheet(
                 online ? "color: #4ade80; font-size: 26px; font-weight: 700;"
                        : "color: #ff5c5c; font-size: 26px; font-weight: 700;");
         }
         if (m_camMotionLabel)
             m_camMotionLabel->setText(vision.value("motion_detected").toBool()
-                                       ? "YES" : "no");
+                                       ? "是" : "否");
         if (m_camFacesLabel)
             m_camFacesLabel->setText(QString::number(vision.value("face_count").toInt()));
         if (m_camInferenceLabel) {
