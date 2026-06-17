@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ====== VM Login Info ======
 VM_USER="rickyduran"
-VM_HOST="192.168.3.243"
+VM_HOST="192.168.3.246"
 VM="${VM_USER}@${VM_HOST}"
 
 # ====== Local Project Info ======

@@ -7,8 +7,16 @@ TEMPLATE = app
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
-    loginpage.cpp
+    loginpage.cpp \
+    faceloginpage.cpp \
+    circulargauge.cpp \
+    qtstackedwidget.cpp \
+    sensorchart.cpp
 
 HEADERS += \
     mainwindow.h \
-    loginpage.h
+    loginpage.h \
+    faceloginpage.h \
+    circulargauge.h \
+    qtstackedwidget.h \
+    sensorchart.h

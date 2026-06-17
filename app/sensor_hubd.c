@@ -76,6 +76,7 @@ struct vision_data {
     int camera_online;
     int motion_detected;
     int face_count;
+    int tamper_detected;
     int valid;
 };
 
@@ -133,13 +134,15 @@ static const char *state_to_string(enum alarm_state s)
 
 static const char *get_alarm_reason(enum alarm_state s, int motion_delta,
                                      int ps, int als, int mpu_ok, int ap_ok,
-                                     int vision_motion, int vision_faces)
+                                     int vision_motion, int vision_faces,
+                                     int vision_tamper)
 {
     switch (s) {
     case STATE_NORMAL:   return "none";
     case STATE_FAULT:    return mpu_ok ? "ap3216c sensor fault"
                                       : "mpu6050 sensor fault";
     case STATE_ALARM:
+        if (vision_tamper)    return "camera tamper detected";
         if (vision_faces > 0) return "face intrusion";
         if (vision_motion)    return "vision motion detected";
         if (motion_delta > 0) return "motion threshold exceeded";
@@ -286,8 +289,9 @@ static int read_vision(struct vision_data *v)
     buf[n] = '\0';
 
     /* extract key fields with minimal JSON parser */
-    v->camera_online   = strstr(buf, "\"camera_online\": true")  ? 1 : 0;
-    v->motion_detected = strstr(buf, "\"motion_detected\": true") ? 1 : 0;
+    v->camera_online    = strstr(buf, "\"camera_online\": true")  ? 1 : 0;
+    v->motion_detected  = strstr(buf, "\"motion_detected\": true") ? 1 : 0;
+    v->tamper_detected  = strstr(buf, "\"tamper_detected\": true") ? 1 : 0;
 
     /* face_count is an integer: look for "face_count": N */
     {
@@ -611,7 +615,7 @@ static void write_status_json(const struct app_config *cfg,
         state_to_string(state),
         get_alarm_reason(state, motion_delta, ap->ps, ap->als,
                          mpu->valid, ap->valid,
-                         0, 0),
+                         0, 0, vis->tamper_detected),
         ts_ms,
         mpu->valid ? mpu->ax : 0,
         mpu->valid ? mpu->ay : 0,
@@ -812,7 +816,10 @@ static enum alarm_state evaluate_state(const struct app_config *cfg,
         g_fault_count = 0;
     }
 
-    /* ALARM level — vision takes priority (face intrusion) */
+    /* ALARM level — tamper takes highest priority, then face intrusion */
+    if (vis->valid && vis->tamper_detected)
+        return STATE_ALARM;
+
     if (vis->valid && vis->camera_online && vis->face_count > 0)
         return STATE_ALARM;
 
@@ -1085,7 +1092,8 @@ int main(int argc, char *argv[])
                      state_to_string(last_state), state_to_string(state),
                      get_alarm_reason(state, motion_delta,
                                       ap.ps, ap.als, mpu_ok, ap_ok,
-                                      vis.motion_detected, vis.face_count));
+                                      vis.motion_detected, vis.face_count,
+                                      vis.tamper_detected));
             log_event(&cfg,
                       state == STATE_NORMAL ? "INFO" : "ALARM",
                       msg);
@@ -1094,7 +1102,8 @@ int main(int argc, char *argv[])
                 double t = mpu.valid ? MPU_TEMP_TO_C(mpu.temp) : 0.0;
                 const char *reason = get_alarm_reason(state, motion_delta,
                     ap.ps, ap.als, mpu_ok, ap_ok,
-                    vis.motion_detected, vis.face_count);
+                    vis.motion_detected, vis.face_count,
+                    vis.tamper_detected);
                 db_log_alarm(state_to_string(state), reason,
                              motion_delta, ap.ps, ap.als, t,
                              (state == STATE_NORMAL) ? 1 : 0);

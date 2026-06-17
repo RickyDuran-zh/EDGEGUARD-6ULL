@@ -2,7 +2,7 @@
 
 基于 i.MX6ULL-S1 Pro 开发板的边缘安全监控系统。
 
-> **当前版本**：P1 摄像头集成已部署验证通过 | P2 人脸检测代码就绪，等待 ncnn 交叉编译 | 最后更新：2026-06-13
+> **当前版本**：P1 摄像头集成已部署 | P2 人脸检测代码就绪（JPEG 解码待修复） | P3 人脸登录入口 + 遮挡检测已实现 | 最后更新：2026-06-17
 
 ---
 
@@ -30,17 +30,19 @@ EdgeGuard-6ULL/
 │   ├── edgeguard_httpd.c       # HTTP 服务器：Web仪表板、REST API、SSE推送、SQLite查询、Basic Auth
 │   ├── edgeguard_mqttd.c       # MQTT客户端：遥测上报、断线重连
 │   ├── sqlite3.c / sqlite3.h   # SQLite 3.53.1 amalgamation（嵌入式数据库，编译进二进制）
-│   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 双缓冲, 阻塞模式）
-│   ├── edgeguard_visiond.c     # 视觉守护进程：定时拍照、运动检测、写 vision.json
+│   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 4缓冲, select超时3s, flush前2帧）
+│   ├── edgeguard_visiond.c     # 视觉守护进程：3模式(monitor/facelogin/tamper) + cmd监听 + 运动检测 + 遮挡检测 + 人脸检测 + vision.json输出
 │   ├── face_detect.h           # 人脸检测 C/C++ 桥接接口（extern "C"）
-│   ├── face_detect.c           # 纯 C stub 实现（P1，零 AI 依赖，总是返回 face_count=0）
-│   ├── face_detect.cpp         # ncnn 完整推理实现（P2，Ultra-Light-Face-Detector + NMS）
-│   └── Makefile                # 交叉编译 makefile（5个target + C/C++ 分离编译）
+│   ├── face_detect.c           # 纯 C stub 实现（P1/P3，零 AI 依赖，总是返回 face_count=0）
+│   ├── face_detect.cpp         # ncnn 完整推理实现（P2，Ultra-Light-Face-Detector + NMS + SSD prior box解码，已知问题：stb_image 无法解码 B525 MJPEG，待换 libjpeg-turbo）
+│   ├── test_face_detect.c      # 离线人脸检测测试程序（读取 JPEG 文件，打印检测结果）
+│   └── Makefile                # 交叉编译 makefile（6个target + C/C++ 分离编译 + edgeguard_visiond_face）
 │
 ├── ui/                         # Qt5 本地触摸屏界面（C++）
 │   ├── main.cpp                # 入口：QApplication + showFullScreen()
-│   ├── loginpage.h / .cpp      # 登录页：虚拟键盘 + 3次失败锁定30s + 人脸登录入口(P3预留)
-│   ├── mainwindow.h / .cpp     # 主窗口：7页 QStackedWidget + 触摸滑动 + 顶栏Logout + JSON解析
+│   ├── loginpage.h / .cpp      # 登录页：虚拟键盘 + 3次失败锁定30s + 密码/人脸/演示三入口
+│   ├── faceloginpage.h / .cpp  # 人脸登录页：摄像头实时预览(250ms刷新) + 30s超时 + 占位提示(P2修复后自动生效)
+│   ├── mainwindow.h / .cpp     # 主窗口：8页 QStackedWidget (Login→FaceLogin→Dashboard→...→Chart) + 触摸滑动 + 顶栏Logout + JSON解析
 │   ├── EdgeGuardUI.pro         # qmake 工程文件
 │   ├── run_linuxfb.sh          # 板子启动脚本
 │   └── status_sample.json      # 测试用示例 JSON
@@ -88,11 +90,15 @@ EdgeGuard-6ULL/
 │  │ 读vision.json│  │ 返回快照      │  │               │      │
 │  └───┬──┬──┬────┘  └──────┬───────┘  └──────┬────────┘      │
 │      │  │  │              │                  │               │
-│      │  │  │  ┌───────────┴──────────┐       │               │
-│      │  │  │  │ edgeguard_visiond    │       │               │
-│      │  │  │  │ (USB摄像头守护进程)    │       │               │
-│      │  │  │  │ 拍照+运动检测+快照    │       │               │
-│      │  │  │  └──────────┬──────────┘       │               │
+│      │  │  │  ┌───────────┴──────────────────┐    │               │
+│      │  │  │  │ edgeguard_visiond              │    │               │
+│      │  │  │  │ (USB摄像头守护进程, 3模式)       │    │               │
+│      │  │  │  │                                │    │               │
+│      │  │  │  │ monitor: 2s运动检测+人脸触发    │    │               │
+│      │  │  │  │ facelogin: 300ms预览+人脸检测  │    │               │
+│      │  │  │  │ tamper: 2s运动+遮挡检测        │    │               │
+│      │  │  │  │ 读cmd.json, 写preview.jpg     │    │               │
+│      │  │  │  └──────────┬────────────────────┘    │               │
 │      │  │  │              │                  │               │
 │      ↓  ↓  ↓              ↓                  ↓               │
 │  ┌───────────────────────────────────────────────────────┐   │
@@ -127,8 +133,9 @@ EdgeGuard-6ULL/
 | 文件 | 写入者 | 读取者 | 用途 |
 |------|--------|--------|------|
 | `/tmp/edgeguard_status.json` | sensor_hubd | HTTP / MQTT / UI | 实时状态（原子写: .tmp → rename） |
-| `/tmp/edgeguard_cmd.json` | HTTP / UI | sensor_hubd | 命令（mute/ack/demo，读取后删除） |
-| `/tmp/edgeguard_vision.json` | edgeguard_visiond | sensor_hubd / HTTP / UI | 摄像头状态 + 运动/人脸检测结果（2000ms刷新，原子写） |
+| `/tmp/edgeguard_cmd.json` | HTTP / UI / 手动 | sensor_hubd / edgeguard_visiond | 命令（mute/ack/demo/set_config/delete/vision_mode，读取后删除） |
+| `/tmp/edgeguard_vision.json` | edgeguard_visiond | sensor_hubd / HTTP / UI | 摄像头状态 + 运动/人脸/遮挡检测结果（monitor/tamper: 2s刷新, facelogin: 300ms刷新, 原子写） |
+| `/tmp/edgeguard_camera_preview.jpg` | edgeguard_visiond | Qt UI (FaceLoginPage) | facelogin 模式实时预览帧（300ms刷新, 原子写: .tmp → rename） |
 | `/var/log/edgeguard/alarms.db` | sensor_hubd | HTTP | 报警历史（SQLite WAL模式） |
 | `/var/log/edgeguard/snapshots/` | edgeguard_visiond | HTTP | 报警 JPEG 快照（最多50张，超出自动清理） |
 | `/etc/edgeguard/config.json` | sensor_hubd | sensor_hubd | 传感器阈值配置（首次启动自动生成，Web Settings 即时生效） |
@@ -183,57 +190,133 @@ EdgeGuard-6ULL/
 
 ### edgeguard-ui — Qt5 触摸屏界面
 
-- **7 页**：Login / Dashboard / Sensors / Alarms / Settings / System / Vision
+- **8 页**：Login / FaceLogin / Dashboard / Sensors / Alarms / System / Vision / Chart
+- **登录页**：3 入口——密码登录（虚拟键盘 + 3次失败锁定30s）、人脸识别登录（摄像头实时预览 + 占位提示）、演示模式
+- **人脸登录页（P3 新增）**：实时摄像头预览（QTimer 250ms 刷新 `/tmp/edgeguard_camera_preview.jpg`）、30s 超时自动返回、"功能开发中"占位提示（P2 修复后自动生效）
 - **布局**：左侧166px侧边栏（6个导航按钮 + Brand）+ 顶栏Logout按钮 + 右侧内容区
-- **顶栏**：登录页隐藏，认证后显示 "EdgeGuard 6ULL" 品牌 + Logout 按钮
+- **顶栏**：登录页和FaceLogin页隐藏，认证后显示 "EdgeGuard 6ULL" 品牌 + Logout 按钮
 - **触摸**：通过 Qt linuxfb QPA 的 QMouseEvent 实现上下滑动切页、点击侧边栏切页
-- **登录页**：滑动被完全禁用，只能通过按钮或虚拟键盘操作
+- **登录/人脸页**：滑动被完全禁用，只能通过按钮操作
 - **虚拟键盘**：QWERTY 全键盘 + Shift/Backspace/Toggle/Space/.com + Enter 自动跳转密码框
-- **键盘**：按键 1-6 切页、Esc 退出
-- **Demo 模式**：`--demo` 参数模拟传感器数据（含视觉 mock 数据）
+- **键盘**：按键 1-6 切页（认证页）、Esc 退出
+- **Demo 模式**：`--demo` 参数模拟传感器数据（含视觉 mock 数据 + tamper 模拟）
 - **登录认证**：用户名/密码 + 虚拟键盘，3 次失败锁定 30 秒，支持自定义 `/etc/edgeguard/users.json`
-- **Vision 页**：显示 Camera 在线状态 / Motion 检测 / Face Count / Inference 耗时 / 最新快照路径
+- **登录后自动切换**：密码/演示登录成功后发送 `vision_mode: tamper`，登出时发送 `vision_mode: monitor`
+- **Vision 页**：显示 Camera 在线/遮挡状态 / Motion 检测 / Face Count / Inference 耗时 / 最新快照路径
 
-### edgeguard_visiond — USB 摄像头视觉守护进程（P1 ✅ 已部署）
+### edgeguard_visiond — USB 摄像头视觉守护进程（P3 ✅ 已部署）
 
-- **周期**：2000ms（可配置：`--interval <ms>`）
-- **摄像头**：USB UVC (Logitech B525)，V4L2 MJPEG 640×480 捕获
+- **3 种运行模式**，通过 cmd.json 动态切换：
+  - **monitor**（默认）：2000ms 间隔，运动检测 + 运动触发人脸检测，快照留存
+  - **facelogin**：300ms 间隔，每帧写预览帧 `/tmp/edgeguard_camera_preview.jpg`（固定路径覆盖），每帧跑人脸检测，不存快照
+  - **tamper**（登录后）：2000ms 间隔，运动检测 + **遮挡检测** + 运动触发人脸检测
+- **模式切换**：监听 `/tmp/edgeguard_cmd.json` 解析 `{"cmd":"vision_mode","mode":"..."}` 命令（和 sensor_hubd 共用同一个 cmd 通道，visiond 只处理 vision_mode 命令）
+- **摄像头**：USB UVC (Logitech B525)，V4L2 MJPEG 640×480 捕获，mmap 4 缓冲，select 3s 超时，前 2 帧 flush
 - **运动检测**：JPEG 帧文件大小变化启发式检测（阈值 15%），零 AI 依赖
-- **快照留存**：每帧保存到 `/var/log/edgeguard/snapshots/`，**最多保留 50 张**（超出自动删最旧）
+- **遮挡检测（P3 新增）**：连续 3 帧 JPEG size < 5KB（纯黑/纯白画面）→ `tamper_detected: true`
+- **快照留存**：monitor/tamper 模式下每帧保存到 `/var/log/edgeguard/snapshots/`，**最多保留 50 张**（超出自动删最旧）；facelogin 模式不存快照
 - **自动恢复**：摄像头拔出/插入自动重连（hotplug），掉线期间写 `camera_online: false`
 - **内核依赖**：`CONFIG_USB_VIDEO_CLASS=m`（uvcvideo.ko），B525 即插即用
-- **详细方案**：参见 `plan/AI_CAMERA_PLAN.md`
+- **详细方案**：参见 `plan/AI_CAMERA_PLAN.md`、`plan/p3-face-login-plan.md`
 
 **输出格式** (`/tmp/edgeguard_vision.json`)：
 ```json
 {
+  "mode": "tamper",
   "camera_online": true,
   "motion_detected": false,
   "face_count": 0,
-  "snapshot_path": "/var/log/edgeguard/snapshots/20260613_120000.jpg",
+  "snapshot_path": "/var/log/edgeguard/snapshots/20260617_120000.jpg",
+  "preview_path": "null",
+  "tamper_detected": false,
   "inference_ms": 35,
-  "timestamp": "2026-06-13 12:00:00",
+  "timestamp": "2026-06-17 12:00:00",
   "face_verify_result": null
 }
 ```
 
-**运动检测触发状态机**：
+**各模式触发状态机**：
 ```
-motion_detected = true → sensor_hubd 状态机 NORMAL → WARNING（黄灯闪烁）
-face_count > 0        → sensor_hubd 状态机 WARNING → ALARM（红灯+蜂鸣器）  【P2 生效】
+monitor: motion_detected=true → sensor_hubd WARNING（黄灯闪烁）
+         face_count>0         → sensor_hubd ALARM（红灯+蜂鸣器）【P2修复后生效】
+
+facelogin: 写preview.jpg → Qt UI FaceLoginPage 实时显示
+           face_count>0 → face_verify_result.matched=true → 登录成功【P2修复后生效】
+
+tamper:   motion_detected=true → sensor_hubd WARNING
+          tamper_detected=true → sensor_hubd ALARM（"摄像头被遮挡"）
+          face_count>0         → sensor_hubd ALARM【P2修复后生效】
 ```
 
-### face_detect — 人脸检测模块（P2 代码就绪，等待 ncnn）
+**手动模式切换命令**：
+```bash
+echo '{"cmd":"vision_mode","mode":"facelogin"}' > /tmp/edgeguard_cmd.json  # UI 人脸登录预览
+echo '{"cmd":"vision_mode","mode":"tamper"}'    > /tmp/edgeguard_cmd.json  # 登录后遮挡检测
+echo '{"cmd":"vision_mode","mode":"monitor"}'   > /tmp/edgeguard_cmd.json  # 恢复默认
+```
+
+### face_detect — 人脸检测模块（P2 代码完成，JPEG 解码待修复）
 
 - **双模式架构**：
-  - **Stub 模式**（当前）：`face_detect.c` 纯 C，零依赖，总是返回 `face_count=0`，P1 功能不受影响
-  - **NCNN 模式**：`face_detect.cpp`（`-DEDGEGUARD_USE_NCNN`），Ultra-Light-Face-Detector-1MB 模型推理
+  - **Stub 模式**（P1/P3 默认）：`face_detect.c` 纯 C，零依赖，总是返回 `face_count=0`，功能不受影响
+  - **NCNN 模式**：`face_detect.cpp`（`-DEDGEGUARD_USE_NCNN`），Ultra-Light-Face-Detector-1MB (RFB-320) 模型推理
 - **接口**：纯 C 接口（`extern "C"`），visiond 直接调用，不感知底层实现
-- **推理流程**：JPEG → stb_image 解码 RGB → 缩放 320×240 → ncnn 推理 → NMS → face_count
+- **推理流程**：JPEG → JPEG 解码 RGB → 缩放 320×240 → ncnn 推理 → SSD prior box 解码（4420 anchor boxes）→ NMS → face_count
 - **性能预估**：~300-600ms/帧（Cortex-A7 @ 800MHz + NEON），仅在运动触发时运行，节省 CPU
 - **模型文件**：`/etc/edgeguard/models/ultra_face.param` + `ultra_face.bin`（int8 量化 ~300KB）
 - **编译命令**：`make edgeguard_visiond_face NCNN_DIR=/path/to/ncnn STB_DIR=/path/to/stb`
-- **状态**：代码完成 ✅ | ncnn 交叉编译待做 | 模型文件待下载
+
+**已知问题**：
+- ✅ ncnn 模型加载正常，SSD 解码 + NMS 逻辑正确（互联网 JPEG 可正常检测到人脸，离线测试通过）
+- ❌ **stb_image 无法正确解码 B525 摄像头的 MJPEG 帧**（解码后为纯绿色图像 → face_count=0）
+- 🔧 **待修复**：替换 stb_image → libjpeg-turbo，在开发板上安装 `libjpeg62-turbo-dev` 或交叉编译
+- 📍 **相关文件**：`app/face_detect.cpp` 中的 `stbi_load_from_memory()` 调用（需替换为 libjpeg API）
+
+**状态**：模型 + 推理 + 解码逻辑完成 ✅ | JPEG 解码器待替换 🔧 | 替换后无需改 UI 代码即可自动生效
+
+### P3 人脸登录入口 + 遮挡检测（✅ 已实现）
+
+**登录页 3 入口**：
+```
+LoginPage:  [密码登录]  [人脸识别登录]  [演示]
+                │            │             │
+                ▼            ▼             ▼
+           密码验证成功   FaceLoginPage   演示模式
+                │       (实时预览+占位)      │
+                │            │             │
+                └────────────┼─────────────┘
+                             ▼
+                    认证成功 → vision_mode: tamper
+                             → Dashboard
+```
+
+**FaceLoginPage 数据流**：
+```
+UI 点击"人脸识别登录"
+  → sendCommand({"cmd":"vision_mode","mode":"facelogin"})
+  → visiond 切换到 300ms 快速采集
+  → visiond 每帧写入 /tmp/edgeguard_camera_preview.jpg (覆盖)
+  → FaceLoginPage QTimer 250ms 读取 → QLabel.setPixmap() 显示
+  → 用户看到实时画面 (3-4 fps)
+  → 点击"返回密码登录"或 30s 超时 → sendCommand({"cmd":"vision_mode","mode":"monitor"})
+  → 回到 LoginPage
+```
+
+**登录后遮挡检测**：
+```
+密码/演示登录成功
+  → sendCommand({"cmd":"vision_mode","mode":"tamper"})
+  → visiond tamper 模式: 2s 间隔 + 运动检测 + 遮挡判断
+  → 连续3帧 JPEG size < 5KB → tamper_detected: true
+  → sensor_hubd 读取 → STATE_ALARM → 蜂鸣器 + 红灯
+  → UI Vision 页显示 "被遮挡" (红色加粗)
+```
+
+**设计要点**：
+- FaceLoginPage 的预览功能完全独立于 P2 人脸检测 —— visiond 直接转发 JPEG 不做解码
+- `faceLoginSuccess` 信号已预留，P2 JPEG 修复后读取 vision JSON 的 `face_count>0` 即可自动触发
+- visiond 和 sensor_hubd 共用 `/tmp/edgeguard_cmd.json`，各处理自己的命令，互不干扰
+- 登出时自动发送 `vision_mode: monitor` 恢复正常监控模式
 
 ---
 
@@ -329,7 +412,7 @@ PC:   IPv4 属性 → 192.168.10.1 / 255.255.255.0
 | 视觉检测结果 | `curl http://192.168.10.2:8080/api/vision` | JSON 格式（motion/face） |
 | API 状态查询 | `curl http://192.168.10.2:8080/api/status` | 完整传感器+视觉 JSON |
 | 报警历史 | `curl http://192.168.10.2:8080/api/alarms?limit=10` | SQLite 查询，支持分页 |
-| LCD 触摸屏 | 板子本地 | Qt5 linuxfb 界面，7页 |
+| LCD 触摸屏 | 板子本地 | Qt5 linuxfb 界面，8页（含人脸登录页实时预览） |
 | MQTT 订阅 | `mosquitto_sub -t 'edgeguard/#' -v` | PC 端运行 |
 
 ### 命令操作
@@ -343,6 +426,15 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=ack_alarm"
 
 # 触发测试报警
 curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
+
+# 切换 visiond 模式（直接写 cmd.json）
+echo '{"cmd":"vision_mode","mode":"facelogin"}' > /tmp/edgeguard_cmd.json  # 人脸登录预览
+echo '{"cmd":"vision_mode","mode":"tamper"}'    > /tmp/edgeguard_cmd.json  # 遮挡检测
+echo '{"cmd":"vision_mode","mode":"monitor"}'   > /tmp/edgeguard_cmd.json  # 默认监控
+
+# 验证预览帧和遮挡状态
+ls -la /tmp/edgeguard_camera_preview.jpg   # facelogin 模式下应 < 3s 更新
+cat /tmp/edgeguard_vision.json | python -m json.tool  # 检查 mode/tamper_detected 字段
 ```
 
 ---
@@ -382,6 +474,7 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
         └──────────┬───────────────┘
           运动>15000│  接近>220
        视觉人脸检测 ═╡  (P2: face_count>0)
+        摄像头遮挡  ═╡  (P3: tamper_detected=true)
                    ↓
         ┌──────────────────────────┐
         │  ALARM (红灯 250ms快闪+蜂鸣)│
@@ -394,9 +487,15 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 
 非 NORMAL 状态至少持续 2 秒（迟滞），防止传感器数据边界抖动。
 
-视觉联动（P1 已部署）：
-  motion_detected=true → WARNING（与传感器运动/接近检测同级）
-  face_count>0         → ALARM   （P2 ncnn 启用后生效）
+视觉联动（P3 已部署）：
+  motion_detected=true  → WARNING（与传感器运动/接近检测同级）
+  tamper_detected=true  → ALARM   （P3: 摄像头被遮挡，最高优先级）
+  face_count>0          → ALARM   （P2: ncnn 修复后生效）
+
+visiond 模式切换：
+  monitor   (默认)    — 2s 间隔，运动检测，快照留存
+  facelogin (登录预览) — 300ms 间隔，写预览帧，每帧人脸检测
+  tamper    (登录后)   — 2s 间隔，运动检测 + 遮挡检测
 ```
 
 ---
@@ -409,7 +508,7 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 | `edgeguard-httpd.service` | After edgeguard | HTTP 服务器 :8080 |
 | `edgeguard-mqttd.service` | After edgeguard | MQTT 客户端 |
 | `edgeguard-ui.service` | After edgeguard + multi-user | Qt5 LCD 界面 |
-| `edgeguard-visiond.service` | After multi-user | USB 摄像头视觉守护进程 |
+| `edgeguard-visiond.service` | After multi-user | USB 摄像头视觉守护进程（3模式） |
 
 所有服务均配置 `Restart=always`，异常退出自动重启。
 
@@ -422,7 +521,8 @@ curl -u admin:edgeguard "http://192.168.10.2:8080/api/cmd?cmd=demo_alarm"
 - 修改驱动后需检查：Makefile、compatible 匹配、MODULE_DEVICE_TABLE、probe/remove
 - 内核 API 需兼容 Linux 4.19.35
 - 用户态代码零外部库依赖（仅 libc + pthread + SQLite amalgamation）
-- P1 编译仅需 gcc；P2 需要 g++（C++11）+ ncnn 库
-- face_detect 使用 stub/full 双模式：stub 保证 P1 独立可编译运行，full 模式按需激活
+- P1 编译仅需 gcc；P2 需要 g++（C++11）+ ncnn 库 + libjpeg-turbo
+- face_detect 使用 stub/full 双模式：stub 保证 P1/P3 独立可编译运行，full 模式按需激活
 - 所有 IPC 文件使用原子写（.tmp → rename），避免读者读到半写数据
+- visiond 和 sensor_hubd 共用 `/tmp/edgeguard_cmd.json`，各自按 `cmd` 字段过滤：sensor_hubd 处理 mute/ack/demo，visiond 只处理 vision_mode
 - 不要将 SSH 密码、API Key 写入代码

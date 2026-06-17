@@ -44,6 +44,15 @@ edgeguard_visiond_face: edgeguard_visiond.c camera_v4l2.c face_detect.cpp camera
 	  edgeguard_visiond.o camera_v4l2.o face_detect_ncnn.o \
 	  -L$(NCNN_DIR)/build-arm/src -lncnn -lpthread -ldl -lstdc++ -fopenmp
 
+test_face_detect: test_face_detect.c face_detect.cpp face_detect.h
+	arm-linux-gnueabihf-gcc $(CFLAGS) -c test_face_detect.c -o test_face_detect.o
+	arm-linux-gnueabihf-g++ $(CXXFLAGS) -DEDGEGUARD_USE_NCNN \
+	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(STB_DIR) \
+	  -c face_detect.cpp -o face_detect_ncnn.o
+	arm-linux-gnueabihf-g++ -o test_face_detect \
+	  test_face_detect.o face_detect_ncnn.o \
+	  -L$(NCNN_DIR)/build-arm/src -lncnn -lpthread -ldl -lstdc++ -fopenmp
+
 copy:
 	sudo cp sensor_hubd /home/rickyduran/sharedir
 	sudo cp edgeguard_httpd /home/rickyduran/sharedir

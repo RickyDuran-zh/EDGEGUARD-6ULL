@@ -4,14 +4,16 @@
 #include <QMainWindow>
 #include <QLabel>
 #include <QPushButton>
-#include <QStackedWidget>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QJsonObject>
 #include <QVector>
-#include <QPoint>
-#include <QMouseEvent>
 
 class LoginPage;
+class FaceLoginPage;
+class CircularGauge;
+class QtStackedWidget;
+class SensorChart;
 
 class MainWindow : public QMainWindow
 {
@@ -22,28 +24,27 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
-    void mousePressEvent(QMouseEvent *event) override;
-    void mouseMoveEvent(QMouseEvent *event) override;
-    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private slots:
     void refreshStatus();
-    void switchPage(int index);
+    void switchPage(int index, bool animated = true);
     void onMuteClicked();
     void onAckClicked();
     void onLoginSuccess();
     void onDemoRequested();
+    void onFaceLoginRequested();
+    void onFaceLoginCancel();
 
 private:
     void parseArguments();
     void buildUi();
-    QWidget *buildSidebar();
+    QWidget *buildBottomBar();
     QWidget *buildDashboardPage();
     QWidget *buildSensorPage();
     QWidget *buildAlarmPage();
-    QWidget *buildSettingsPage();
     QWidget *buildSystemPage();
     QWidget *buildVisionPage();
+    QWidget *buildChartPage();
     QWidget *makeCard(const QString &title, QLabel **valueLabel, const QString &initial = "--");
     QLabel *makeTitle(const QString &text);
     QLabel *makeSmallText(const QString &text);
@@ -51,15 +52,16 @@ private:
     QJsonObject makeDemoStatus();
     void applyStatus(const QJsonObject &obj, bool demo);
     void applyServiceLost();
-    void updateNavStyle();
-    void sendCommand(const QString &cmd);
+    void updateNavStyle(int visual);
+    void sendCommand(const QString &cmd, const QString &mode = QString());
     QString valueToString(const QJsonObject &obj, const QString &key, const QString &fallback = "--") const;
     int valueToInt(const QJsonObject &obj, const QString &key, int fallback = 0) const;
 
 private:
-    QStackedWidget *m_stack;
-    QVector<QPushButton *> m_navButtons;
+    QtStackedWidget *m_stack;
+    QVector<QPushButton *> m_bottomButtons;
     QTimer *m_timer;
+    QElapsedTimer m_demoTimer;
     QString m_statusPath;
     bool m_demoMode;
     int m_demoCounter;
@@ -68,9 +70,9 @@ private:
     QLabel *m_modeBadge;
     QLabel *m_stateLabel;
     QLabel *m_alarmReasonLabel;
-    QLabel *m_alsLabel;
-    QLabel *m_psLabel;
-    QLabel *m_motionLabel;
+    CircularGauge *m_alsGauge;
+    CircularGauge *m_psGauge;
+    CircularGauge *m_motionGauge;
     QLabel *m_ledLabel;
     QLabel *m_buzzerLabel;
     QLabel *m_timeLabel;
@@ -88,13 +90,11 @@ private:
     QPushButton *m_muteBtn;
     QPushButton *m_ackBtn;
 
-    QLabel *m_intervalLabel;
-    QLabel *m_thresholdLabel;
-
     QLabel *m_ipLabel;
     QLabel *m_uptimeLabel;
     QLabel *m_serviceLabel;
     QLabel *m_networkLabel;
+    QLabel *m_svcStatusLabel;
 
     // Vision
     QLabel *m_camOnlineLabel;
@@ -103,20 +103,19 @@ private:
     QLabel *m_camSnapshotLabel;
     QLabel *m_camInferenceLabel;
 
+    // Chart
+    SensorChart *m_chart;
+    int m_chartMode;  // 0=ALS, 1=PS, 2=Motion, 3=Temp
+
     // Top bar (logout)
     QWidget *m_topBar;
     QPushButton *m_logoutBtn;
 
     // Login
     LoginPage *m_loginPage;
-    QWidget *m_sidebar;
+    FaceLoginPage *m_faceLoginPage;
+    QWidget *m_bottomBar;
     bool m_authenticated;
-
-    // Swipe (Qt mouse events)
-    QPoint m_pressPos;
-    bool   m_pressing;
-    bool   m_swiped;
-    static const int kSwipeThresh = 70;
 };
 
 #endif // MAINWINDOW_H

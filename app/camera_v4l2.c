@@ -126,10 +126,10 @@ struct camera_ctx *camera_open(const char *device,
     ctx->height      = fmt.fmt.pix.height;
     ctx->pixelformat = fmt.fmt.pix.pixelformat;
 
-    /* 4. request buffers */
+    /* 4. request buffers — 4 buffers avoid races on slow USB hosts */
     struct v4l2_requestbuffers req;
     memset(&req, 0, sizeof(req));
-    req.count  = 2;
+    req.count  = 4;
     req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
 
