@@ -575,8 +575,9 @@ void MainWindow::switchPage(int index, bool animated)
     // Login + FaceLogin pages: disable swipe; authenticated pages: enable swipe
     m_stack->setPressMove(index > 1);
 
-    // Button click → instant; swipe → animated
-    if (!animated || (m_stack->currentIndex() <= 1 && index > 1))
+    // All transitions from pre-auth pages (0,1) are instant;
+    // swipe-driven transitions on authenticated pages are animated
+    if (!animated || m_stack->currentIndex() <= 1)
         m_stack->setCurrentIndexNoAnim(index);
     else
         m_stack->setCurrentIndex(index);
@@ -773,8 +774,8 @@ QJsonObject MainWindow::makeDemoStatus()
     vision["face_count"] = (phase > 27) ? 1 : 0;
     vision["tamper_detected"] = (phase > 28);
     vision["preview_path"] = "null";
-    vision["inference_ms"] = 45;
-    vision["snapshot_path"] = "null";  /* demo mode — no real camera */
+    vision["inference_ms"] = (phase > 27) ? 350 + (m_demoCounter % 200) : 8;
+    vision["snapshot_path"] = (phase > 26) ? "/var/log/edgeguard/snapshots/demo_snap.jpg" : "null";
 
     obj["mpu6050"] = mpu;
     obj["ap3216c"] = ap3216;
@@ -971,8 +972,8 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
             };
             bool ui  = true;  // this process IS the UI
             bool web = procAlive("edgeguard_httpd");
-            bool cam = procAlive("edgeguard_visi");
-            bool mq  = procAlive("edgeguard_mqtt");
+            bool cam = procAlive("edgeguard_visio");   /* truncated from edgeguard_visiond */
+            bool mq  = procAlive("edgeguard_mqttd");
             svcCached = QString("UI界面: ●  |  Web: %1  |  摄像头: %2  |  MQTT: %3")
                 .arg(web ? "●" : "○")
                 .arg(cam ? "●" : "○")

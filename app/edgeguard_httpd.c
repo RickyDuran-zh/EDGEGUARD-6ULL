@@ -29,7 +29,8 @@
 #define MAX_CONNECTIONS     10
 #define MAX_SSE_CLIENTS     8
 #define REQ_BUF_SIZE        4096
-#define RESP_BUF_SIZE       65536
+#define RESP_BUF_SIZE       16384    /* 16 KB — enough for all JSON API responses */
+#define DASH_RESP_BUF_SIZE  262144   /* 256 KB heap — SPA HTML needs ~85 KB, safe margin */
 #define RECV_TIMEOUT_SEC    2
 
 /* ---- global config ---- */
@@ -41,7 +42,7 @@ static char          g_cmd_tmp_path[272];  /* g_cmd_path + ".tmp" */
 static pthread_mutex_t g_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---- auth settings (can be overridden via CLI) ---- */
-#define AUTH_ENABLE 1
+#define AUTH_ENABLE 0  /* set to 1 to enable Basic Auth */
 static char g_auth_user[64] = "admin";
 static char g_auth_pass[64] = "edgeguard";
 
@@ -289,7 +290,7 @@ static const char *get_dashboard_html(void)
 "border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;"
 "transition:background .15s,color .15s;white-space:nowrap}\n"
 ".tab:hover{background:var(--bg3);color:var(--white)}\n"
-".tab.active{background:var(--blue);color:#fff}\n"
+".tab.active{background:var(--accent);color:#fff}\n"
 ".topbar-right{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--text2);white-space:nowrap}\n"
 ".conn-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}\n"
 ".conn-live{background:var(--green);box-shadow:0 0 5px var(--green)}\n"
@@ -300,7 +301,7 @@ static const char *get_dashboard_html(void)
 ".page.active{display:block}\n"
 
 /* ---- overview strip ---- */
-".overview-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}\n"
+".overview-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px}\n"
 ".ov-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
 "padding:16px 20px;text-align:center}\n"
 ".ov-card .ov-val{font-size:28px;font-weight:800;line-height:1.1}\n"
@@ -310,11 +311,12 @@ static const char *get_dashboard_html(void)
 ".ov-card.state-ALARM .ov-val{color:var(--red);animation:blink .5s infinite}\n"
 ".ov-card.state-FAULT .ov-val{color:var(--red)}\n"
 "@keyframes blink{50%{opacity:.3}}\n"
+".ov-card.state-TAMPER .ov-val{color:var(--red);animation:blink .5s infinite}\n"
 
 /* ---- cards ---- */
 ".card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
 "padding:16px 20px;margin-bottom:12px}\n"
-".card h2{font-size:12px;color:var(--blue);margin-bottom:12px;"
+".card h2{font-size:12px;color:var(--accent);margin-bottom:12px;"
 "text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px}\n"
 ".dot{width:7px;height:7px;border-radius:50%;display:inline-block}\n"
 ".dot-on{background:var(--green);box-shadow:0 0 4px var(--green)}\n"
@@ -369,6 +371,26 @@ static const char *get_dashboard_html(void)
 ".cam-placeholder{display:inline-block;padding:60px 80px;background:var(--bg3);"
 "border-radius:8px;color:var(--text2);font-size:14px}\n"
 ".cam-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}\n"
+/* new camera page components */
+".cam-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}\n"
+".cam-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:center}\n"
+".cam-card .cam-val{font-size:22px;font-weight:700;line-height:1.2}\n"
+".cam-card .cam-lbl{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}\n"
+".cam-card.cam-online .cam-val{color:var(--green)}\n"
+".cam-card.cam-offline .cam-val{color:var(--red)}\n"
+".cam-card.cam-tamper .cam-val{color:var(--red);animation:blink .5s infinite}\n"
+".cam-card.cam-warn .cam-val{color:var(--yellow)}\n"
+".verify-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:12px}\n"
+".verify-card.matched{border-color:var(--green)}\n"
+".verify-row{display:flex;gap:24px;flex-wrap:wrap;font-size:13px}\n"
+".verify-row .lbl{color:var(--text2)}\n"
+".verify-row .val{color:var(--white);font-weight:600}\n"
+".snap-img{width:100%;max-width:640px;border-radius:10px;border:2px solid var(--border);display:block;margin:0 auto 8px}\n"
+".vision-bar{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;padding-top:8px;border-top:1px solid var(--border);margin-top:8px}\n"
+".vision-bar .v-item{display:flex;align-items:center;gap:4px}\n"
+".vision-bar .v-dot{width:6px;height:6px;border-radius:50%;display:inline-block}\n"
+".vision-bar .v-dot.on{background:var(--green)}\n"
+".vision-bar .v-dot.off{background:var(--red)}\n"
 
 /* ---- refresh bar ---- */
 ".refresh-bar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text2);"
@@ -459,6 +481,7 @@ static const char *get_dashboard_html(void)
 "<div class=\"overview-strip\">\n"
 "<div class=\"ov-card\" id=\"ov_state\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">系统状态</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_alarms\"><div class=\"ov-val\">0</div><div class=\"ov-lbl\">累计报警</div></div>\n"
+"<div class=\"ov-card\" id=\"ov_tamper\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">摄像头遮挡</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_uptime\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">运行时长</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_ip\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">板卡 IP</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_temp\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">芯片温度</div></div>\n"
@@ -498,6 +521,12 @@ static const char *get_dashboard_html(void)
 "<button class=\"btn btn-mute\" id=\"btn_mute\" onclick=\"sendCmd('mute_buzzer',this)\">🔇 静音</button>\n"
 "<button class=\"btn btn-ack\"  id=\"btn_ack\"  onclick=\"sendCmd('ack_alarm',this)\">✅ 确认报警</button>\n"
 "<button class=\"btn btn-demo\" id=\"btn_demo\" onclick=\"sendCmd('demo_alarm',this)\">🧪 测试报警</button>\n"
+"</div>\n"
+"<div class=\"vision-bar\">\n"
+"<div class=\"v-item\"><span class=\"v-dot on\" id=\"v_mode_dot\"></span>模式 <b id=\"v_mode\">--</b></div>\n"
+"<div class=\"v-item\"><span class=\"v-dot off\" id=\"v_motion_dot\"></span>运动 <b id=\"v_motion\">--</b></div>\n"
+"<div class=\"v-item\">人脸 <b id=\"v_faces\">0</b></div>\n"
+"<div class=\"v-item\">推理 <b id=\"v_infer\">--</b></div>\n"
 "</div>\n"
 "</div>\n"
 
@@ -580,27 +609,44 @@ static const char *get_dashboard_html(void)
 
 /* ======== Page: Camera ======== */
 "<div id=\"page-camera\" class=\"page\">\n"
+/* snapshot preview */
 "<div class=\"card\">\n"
-"<h2>实时快照</h2>\n"
-"<div class=\"cam-preview\" id=\"cam_preview\">\n"
-"<span class=\"cam-placeholder\">摄像头离线或未连接</span>\n"
-"</div>\n"
-"<div style=\"text-align:center;margin-bottom:12px\">\n"
+"<h2>实时快照 <span style=\"font-weight:400;color:var(--text2);margin-left:8px;font-size:11px\" id=\"cam_update_hint\"></span></h2>\n"
+"<img class=\"snap-img\" id=\"cam_snap_img\" src=\"\" alt=\"摄像头快照\" onerror=\"this.style.display='none'\" style=\"display:block\">\n"
+"<div style=\"text-align:center;margin-top:8px\">\n"
 "<button class=\"btn btn-ack\" style=\"font-size:11px;padding:6px 14px;cursor:pointer\" onclick=\"refreshCamera()\">🔄 手动刷新</button>\n"
-"<span style=\"font-size:12px;color:var(--text2);margin-left:8px\" id=\"cam_update_hint\"></span>\n"
 "</div>\n"
 "</div>\n"
+/* info grid — 5 cards */
+"<div class=\"cam-grid\">\n"
+"<div class=\"cam-card\" id=\"cam_status_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">摄像头</div></div>\n"
+"<div class=\"cam-card\" id=\"cam_mode_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">当前模式</div></div>\n"
+"<div class=\"cam-card\" id=\"cam_tamper_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">遮挡检测</div></div>\n"
+"<div class=\"cam-card\" id=\"cam_motion_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">运动检测</div></div>\n"
+"<div class=\"cam-card\" id=\"cam_faces_card\"><div class=\"cam-val\">0</div><div class=\"cam-lbl\">人脸数量</div></div>\n"
+"</div>\n"
+/* verify result */
+"<div class=\"verify-card\" id=\"cam_verify_card\" style=\"display:none\">\n"
+"<h2 style=\"margin-bottom:6px\">人脸验证结果</h2>\n"
+"<div class=\"verify-row\">"
+"<span class=\"lbl\">匹配</span><span class=\"val\" id=\"cv_matched\">--</span>"
+"<span class=\"lbl\">用户</span><span class=\"val\" id=\"cv_user\">--</span>"
+"<span class=\"lbl\">置信度</span><span class=\"val\" id=\"cv_conf\">--</span>"
+"</div>\n"
+"</div>\n"
+/* inference + snapshot path */
+"<div class=\"card\">\n"
+"<div class=\"sensor-row\">"
+"<span class=\"lbl\">推理耗时</span><span class=\"val\" id=\"cam_infer\">--</span>"
+"<span class=\"lbl\">快照路径</span><span class=\"val\" id=\"cam_snap_path\" style=\"font-size:10px;word-break:break-all\">--</span>"
+"</div>\n"
+"</div>\n"
+/* snapshot gallery */
 "<div class=\"card\">\n"
 "<h2>历史快照 <span style=\"font-weight:400;color:var(--text2);margin-left:8px;font-size:11px\">(最新20张)</span></h2>\n"
 "<div class=\"snap-gallery\" id=\"snap_gallery\">\n"
 "<span style=\"color:var(--text2);font-size:12px\">加载中...</span>\n"
 "</div>\n"
-"</div>\n"
-"<div class=\"cam-info\">\n"
-"<div class=\"card\"><h2>摄像头</h2><div class=\"ov-val\" id=\"cam_status_val\" style=\"font-size:22px\">离线</div></div>\n"
-"<div class=\"card\"><h2>运动检测</h2><div class=\"ov-val\" id=\"cam_motion_val\" style=\"font-size:22px\">--</div></div>\n"
-"<div class=\"card\"><h2>人脸计数</h2><div class=\"ov-val\" id=\"cam_faces_val\" style=\"font-size:22px\">0</div></div>\n"
-"<div class=\"card\"><h2>推理耗时</h2><div class=\"ov-val\" id=\"cam_infer_val\" style=\"font-size:22px\">--</div></div>\n"
 "</div>\n"
 "</div>\n"
 
@@ -757,6 +803,19 @@ static const char *get_dashboard_html(void)
 "else{ba.textContent='✅ 确认报警';ba.classList.remove('active');ba.disabled=!1}\n"
 /* vision */
 "var vis=d.vision||{};camOnline=vis.camera_online||!1;\n"
+/* tamper overview card */
+"var tc=document.getElementById('ov_tamper');if(tc){var t=vis.tamper_detected;"
+"tc.className='ov-card'+(t?' state-TAMPER':'');"
+"tc.querySelector('.ov-val').textContent=t?'⚠被遮挡':'安全'}\n"
+/* vision bar in device card */
+"var vm=document.getElementById('v_mode');if(vm){var md=vis.mode||'monitor';"
+"var mdCN={monitor:'监控',tamper:'防护',facelogin:'登录'};vm.textContent=mdCN[md]||md;"
+"var vmd=document.getElementById('v_mode_dot');vmd.className='v-dot '+(md==='facelogin'?'on':'off')}\n"
+"var vmo=document.getElementById('v_motion');if(vmo){"
+"vmo.textContent=vis.motion_detected?'检测到':'无';"
+"var vmod=document.getElementById('v_motion_dot');vmod.className='v-dot '+(vis.motion_detected?'on':'off')}\n"
+"var vf=document.getElementById('v_faces');if(vf)vf.textContent=vis.face_count||0;\n"
+"var vi=document.getElementById('v_infer');if(vi){var ims=vis.inference_ms||0;vi.textContent=ims>0?ims+' ms':'--'}\n"
 /* connection */
 "document.getElementById('conn_status').innerHTML="
 "'<span class=\"conn-dot conn-live\"></span>在线';connLost=0;\n"
@@ -826,23 +885,44 @@ static const char *get_dashboard_html(void)
 "}\n"
 
 /* ---- camera refresh ---- */
-"function refreshCamera(){\n"
-"var cs=document.getElementById('cam_status_val');\n"
-"var cm=document.getElementById('cam_motion_val');\n"
-"var cf=document.getElementById('cam_faces_val');\n"
-"var ci=document.getElementById('cam_infer_val');\n"
-"var cp=document.getElementById('cam_preview');\n"
+"function updateCameraInfo(v){\n"
+/* camera status */
+"var cs=document.getElementById('cam_status_card');\n"
+"var on=v.camera_online||!1;\n"
+"if(cs){cs.className='cam-card '+(on?'cam-online':'cam-offline');cs.querySelector('.cam-val').textContent=on?'在线':'离线'}\n"
+/* mode */
+"var cmo=document.getElementById('cam_mode_card');\n"
+"if(cmo){var md=v.mode||'monitor';var mdCN={monitor:'监控模式',tamper:'防护模式',facelogin:'登录模式'};cmo.querySelector('.cam-val').textContent=mdCN[md]||md}\n"
+/* tamper */
+"var ct=document.getElementById('cam_tamper_card');\n"
+"if(ct){var t=v.tamper_detected;ct.className='cam-card '+(t?'cam-tamper':'');ct.querySelector('.cam-val').textContent=t?'⚠被遮挡':'安全'}\n"
+/* motion */
+"var cm=document.getElementById('cam_motion_card');\n"
+"if(cm){cm.className='cam-card '+(v.motion_detected?'cam-warn':'');cm.querySelector('.cam-val').textContent=v.motion_detected?'检测到':'无'}\n"
+/* face count */
+"var cf=document.getElementById('cam_faces_card');\n"
+"if(cf)cf.querySelector('.cam-val').textContent=v.face_count||0;\n"
+/* verify result */
+"var vr=v.face_verify_result;var vc=document.getElementById('cam_verify_card');\n"
+"if(vc&&vr&&vr.matched){vc.style.display='';vc.className='verify-card matched';\n"
+"var vm=document.getElementById('cv_matched');if(vm)vm.textContent='是';\n"
+"var vu=document.getElementById('cv_user');if(vu)vu.textContent=vr.user_id||'--';\n"
+"var vf=document.getElementById('cv_conf');if(vf)vf.textContent=(vr.confidence||0).toFixed(2)}\n"
+"else if(vc){vc.style.display='none'}\n"
+/* inference + path */
+"var ci=document.getElementById('cam_infer');\n"
+"if(ci){var ims=v.inference_ms||0;ci.textContent=ims>0?ims+' ms':'--'}\n"
+"var csp=document.getElementById('cam_snap_path');\n"
+"if(csp){var sp=v.snapshot_path;csp.textContent=(sp&&sp!=='null')?sp:'--'}\n"
+/* snapshot image */
+"var si=document.getElementById('cam_snap_img');\n"
+"if(si&&on){si.style.display='';si.src='/api/snapshot?t='+Date.now()}\n"
+"else if(si){si.style.display='none'}\n"
 "var ch=document.getElementById('cam_update_hint');\n"
-"fetch('/api/vision').then(function(r){return r.json()}).then(function(v){\n"
-"var on=v.camera_online||!1;camOnline=on;\n"
-"if(cs){cs.textContent=on?'在线':'离线';cs.style.color=on?'#3fb950':'#f85149'}\n"
-"if(cm)cm.textContent=v.motion_detected?'检测到':'无';\n"
-"if(cf)cf.textContent=v.face_count||0;\n"
-"if(ci)ci.textContent=v.inference_ms?v.inference_ms+' ms':'--';\n"
-"if(cp&&on){cp.innerHTML='<img src=\"/api/snapshot?t='+Date.now()+'\" alt=\"snapshot\" onerror=\"this.parentElement.innerHTML=\\'<span class=cam-placeholder>快照加载失败</span>\\'\">';\n"
-"if(ch)ch.textContent='更新于 '+new Date().toLocaleTimeString();}\n"
-"if(cp&&!on){cp.innerHTML='<span class=\"cam-placeholder\">摄像头离线或未连接</span>';if(ch)ch.textContent=''}\n"
-"}).catch(function(){});\n"
+"if(ch)ch.textContent='更新于 '+new Date().toLocaleTimeString()\n"
+"}\n"
+"function refreshCamera(){\n"
+"fetch('/api/vision').then(function(r){return r.json()}).then(function(v){updateCameraInfo(v)}).catch(function(){});\n"
 "}\n"
 
 /* ---- settings ---- */
@@ -1002,7 +1082,7 @@ static void build_dashboard_response(char *resp, size_t size)
 {
     const char *html = get_dashboard_html();
     size_t body_len = strlen(html);
-    snprintf(resp, size,
+    int needed = snprintf(resp, size,
              "HTTP/1.1 200 OK\r\n"
              "Content-Type: text/html; charset=utf-8\r\n"
              "Content-Length: %zu\r\n"
@@ -1010,6 +1090,14 @@ static void build_dashboard_response(char *resp, size_t size)
              "\r\n"
              "%s",
              body_len, html);
+    fprintf(stderr, "[edgeguard_httpd] dashboard HTML body=%zu bytes, "
+            "snprintf needed=%d, buf_size=%zu, TRUNCATED=%s\n",
+            body_len, needed, size,
+            (size_t)needed >= size ? "YES" : "no");
+    if ((size_t)needed >= size) {
+        fprintf(stderr, "[edgeguard_httpd] FATAL: response truncated! "
+                "needed %d > buf %zu\n", needed, size);
+    }
 }
 
 /* ---- build 404 response ---- */
@@ -1511,6 +1599,9 @@ static void *connection_handler(void *arg)
         return NULL;
     }
 
+    fprintf(stderr, "[edgeguard_httpd] REQ: method=%s path=%s\n",
+            method, path);
+
     /* separate path from query string */
     char *query = strchr(path, '?');
     if (query) {
@@ -1520,9 +1611,9 @@ static void *connection_handler(void *arg)
 
     char resp[RESP_BUF_SIZE];
 
-    /* ---- auth check for write operations ---- */
+    /* ---- auth check for all operations (except CORS + SSE stream) ---- */
 #if AUTH_ENABLE
-    if (!strcmp(path, "/api/cmd")) {
+    if (strcmp(method, "OPTIONS") != 0 && strcmp(path, "/api/stream") != 0) {
         int authed = 0;
         const char *auth_hdr = strstr(buf, "Authorization: Basic ");
         if (auth_hdr) {
@@ -1542,7 +1633,13 @@ static void *connection_handler(void *arg)
                 snprintf(expected, sizeof(expected), "%s:%s", g_auth_user, g_auth_pass);
                 if (!strcmp(decoded, expected))
                     authed = 1;
+                fprintf(stderr, "[edgeguard_httpd] AUTH: b64='%s' decoded='%s' expected='%s' match=%d\n",
+                        b64, decoded, expected, authed);
+            } else {
+                fprintf(stderr, "[edgeguard_httpd] AUTH: base64_decode failed for '%s'\n", b64);
             }
+        } else {
+            fprintf(stderr, "[edgeguard_httpd] AUTH: no Authorization header found\n");
         }
         if (!authed) {
             build_401(resp, sizeof(resp));
@@ -1555,7 +1652,19 @@ static void *connection_handler(void *arg)
 
     /* ---- route dispatch ---- */
     if (!strcmp(method, "GET") && !strcmp(path, "/")) {
-        build_dashboard_response(resp, sizeof(resp));
+        /* Dashboard HTML is ~85 KB — too large for stack on ARM.
+         * Allocate on heap to avoid silent stack-overflow crash. */
+        char *dash_resp = malloc(DASH_RESP_BUF_SIZE);
+        if (dash_resp) {
+            build_dashboard_response(dash_resp, DASH_RESP_BUF_SIZE);
+            send_response(client_fd, dash_resp);
+            free(dash_resp);
+        } else {
+            static const char *oom = "HTTP/1.1 500\r\nContent-Length: 0\r\n\r\n";
+            send_response(client_fd, oom);
+        }
+        close(client_fd);
+        return NULL;
 
     } else if (!strcmp(method, "GET") && !strcmp(path, "/api/status")) {
         build_status_response(resp, sizeof(resp));
@@ -1983,6 +2092,13 @@ int main(int argc, char *argv[])
     printf("[edgeguard_httpd] listening on %s:%d\n", ip, g_port);
     printf("[edgeguard_httpd] status: %s  cmd: %s\n",
            g_status_path, g_cmd_path);
+    printf("[edgeguard_httpd] stack_buf=%d bytes, dash_heap_buf=%d KB, thread_stack=%d KB\n",
+           RESP_BUF_SIZE, DASH_RESP_BUF_SIZE / 1024, 128);
+    {
+        const char *html = get_dashboard_html();
+        printf("[edgeguard_httpd] dashboard HTML raw size=%zu bytes\n",
+               strlen(html));
+    }
 
     while (g_running) {
         fd_set rfds;
@@ -2012,7 +2128,7 @@ int main(int argc, char *argv[])
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        pthread_attr_setstacksize(&attr, 128 * 1024);
+        pthread_attr_setstacksize(&attr, 128 * 1024);  /* 128 KB — HTML uses heap, not stack */
 
         if (pthread_create(&tid, &attr, connection_handler,
                           (void *)(intptr_t)client_fd) != 0) {

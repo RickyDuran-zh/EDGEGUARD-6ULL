@@ -5,7 +5,7 @@ Wants=edgeguard.service network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/edgeguard_mqttd --broker 192.168.10.1:1883 --status /tmp/edgeguard_status.json --topic edgeguard
+ExecStart=/imx6ull/app/edgeguard_mqttd --broker 192.168.10.1:1883 --status /tmp/edgeguard_status.json --topic edgeguard
 Restart=always
 RestartSec=10
 User=root

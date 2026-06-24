@@ -25,6 +25,7 @@ signals:
 
 private slots:
     void refreshPreview();
+    void checkVerifyResult();
     void onTimeoutTick();
     void onCancelClicked();
 
@@ -38,6 +39,7 @@ private:
     QPushButton *m_cancelBtn;
     QTimer *m_previewTimer;
     QTimer *m_timeoutTimer;
+    QTimer *m_verifyTimer;
     int m_secondsLeft;
 
     static const int kTimeoutSeconds = 30;

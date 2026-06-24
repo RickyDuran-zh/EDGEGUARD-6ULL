@@ -7,6 +7,8 @@
 #include <QHBoxLayout>
 #include <QPixmap>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDebug>
 
 static const char *kFaceStyle = R"(
@@ -55,12 +57,14 @@ FaceLoginPage::FaceLoginPage(QWidget *parent)
       m_cancelBtn(nullptr),
       m_previewTimer(new QTimer(this)),
       m_timeoutTimer(new QTimer(this)),
+      m_verifyTimer(new QTimer(this)),
       m_secondsLeft(kTimeoutSeconds)
 {
     setStyleSheet(kFaceStyle);
     buildUi();
 
     connect(m_previewTimer, &QTimer::timeout, this, &FaceLoginPage::refreshPreview);
+    connect(m_verifyTimer,  &QTimer::timeout, this, &FaceLoginPage::checkVerifyResult);
     connect(m_timeoutTimer, &QTimer::timeout, this, &FaceLoginPage::onTimeoutTick);
     connect(m_cancelBtn, &QPushButton::clicked, this, &FaceLoginPage::onCancelClicked);
 }
@@ -71,12 +75,14 @@ void FaceLoginPage::startPreview()
     m_timeoutLabel->setText(QString("%1 秒后自动返回").arg(m_secondsLeft));
     m_statusLabel->setText("⌛ 正在检测人脸...");
     m_previewTimer->start(250);   // 4 fps refresh
+    m_verifyTimer->start(500);    // 2 Hz verify check
     m_timeoutTimer->start(1000);  // 1s countdown tick
 }
 
 void FaceLoginPage::stopPreview()
 {
     m_previewTimer->stop();
+    m_verifyTimer->stop();
     m_timeoutTimer->stop();
 }
 
@@ -88,6 +94,29 @@ void FaceLoginPage::refreshPreview()
                                    Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
     // If file doesn't exist yet (visiond not ready), keep showing nothing
+}
+
+void FaceLoginPage::checkVerifyResult()
+{
+    QFile f("/tmp/edgeguard_vision.json");
+    if (!f.open(QIODevice::ReadOnly)) return;
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    f.close();
+
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+
+    QJsonObject root = doc.object();
+    QJsonObject vr = root.value("face_verify_result").toObject();
+    if (vr.value("matched").toBool()) {
+        qDebug() << "[FaceLoginPage] face verified — auto login"
+                 << "user:" << vr.value("user_id").toString()
+                 << "confidence:" << vr.value("confidence").toDouble();
+        stopPreview();
+        m_statusLabel->setText("✅ 识别成功，正在登录...");
+        emit faceLoginSuccess();
+    }
 }
 
 void FaceLoginPage::onTimeoutTick()

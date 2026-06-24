@@ -77,6 +77,8 @@ struct vision_data {
     int motion_detected;
     int face_count;
     int tamper_detected;
+    int inference_ms;
+    char snapshot_path[512];
     int valid;
 };
 
@@ -299,6 +301,28 @@ static int read_vision(struct vision_data *v)
         if (p) {
             p = strchr(p, ':');
             if (p) v->face_count = atoi(p + 1);
+        }
+    }
+    /* inference_ms */
+    {
+        const char *p = strstr(buf, "\"inference_ms\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) v->inference_ms = atoi(p + 1);
+        }
+    }
+    /* snapshot_path */
+    {
+        const char *p = strstr(buf, "\"snapshot_path\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) {
+                p++; while (*p == ' ' || *p == '"') p++;
+                int i = 0;
+                while (*p && *p != '"' && *p != '\n' && i < 511)
+                    v->snapshot_path[i++] = *p++;
+                v->snapshot_path[i] = '\0';
+            }
         }
     }
     v->valid = 1;
@@ -585,7 +609,10 @@ static void write_status_json(const struct app_config *cfg,
         "  \"vision\": {\n"
         "    \"camera_online\": %s,\n"
         "    \"motion_detected\": %s,\n"
-        "    \"face_count\": %d\n"
+        "    \"tamper_detected\": %s,\n"
+        "    \"face_count\": %d,\n"
+        "    \"inference_ms\": %d,\n"
+        "    \"snapshot_path\": \"%s\"\n"
         "  },\n"
         "  \"device\": {\n"
         "    \"led\": \"%s\",\n"
@@ -632,7 +659,10 @@ static void write_status_json(const struct app_config *cfg,
         ap->valid ? "true" : "false",
         (vis->valid && vis->camera_online)   ? "true" : "false",
         (vis->valid && vis->motion_detected) ? "true" : "false",
+        (vis->valid && vis->tamper_detected) ? "true" : "false",
         vis->valid ? vis->face_count : 0,
+        vis->valid ? vis->inference_ms : 0,
+        (vis->valid && vis->snapshot_path[0]) ? vis->snapshot_path : "",
         g_cur_led,
         g_cur_buzzer,
         g_alarm_count,

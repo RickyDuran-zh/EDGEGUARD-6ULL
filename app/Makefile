@@ -30,28 +30,42 @@ face_detect.o: face_detect.c face_detect.h
 	arm-linux-gnueabihf-gcc $(CFLAGS) -c face_detect.c -o face_detect.o
 
 # Full P2 build: ncnn-enabled face detection.
-# Prerequisites: cross-compile ncnn + install g++-arm-linux-gnueabihf
-#   NCNN_DIR — path to ncnn source root
-#   STB_DIR  — path to directory containing stb_image.h
-# Usage: make edgeguard_visiond_face NCNN_DIR=/home/user/ncnn STB_DIR=/home/user/stb
+# Prerequisites: cross-compile ncnn + libjpeg-turbo + install g++-arm-linux-gnueabihf
+#   NCNN_DIR  — path to ncnn source root
+#   JPEG_DIR  — path to libjpeg-turbo install prefix (contains include/jpeglib.h + lib/libjpeg.a)
+# Usage: make edgeguard_visiond_face NCNN_DIR=/home/user/ncnn JPEG_DIR=/opt/libjpeg-arm
 edgeguard_visiond_face: edgeguard_visiond.c camera_v4l2.c face_detect.cpp camera_v4l2.h face_detect.h
 	arm-linux-gnueabihf-gcc $(CFLAGS) -c edgeguard_visiond.c -o edgeguard_visiond.o
 	arm-linux-gnueabihf-gcc $(CFLAGS) -c camera_v4l2.c -o camera_v4l2.o
 	arm-linux-gnueabihf-g++ $(CXXFLAGS) -DEDGEGUARD_USE_NCNN \
-	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(STB_DIR) \
+	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(JPEG_DIR)/include \
 	  -c face_detect.cpp -o face_detect_ncnn.o
 	arm-linux-gnueabihf-g++ -o edgeguard_visiond_face \
 	  edgeguard_visiond.o camera_v4l2.o face_detect_ncnn.o \
-	  -L$(NCNN_DIR)/build-arm/src -lncnn -lpthread -ldl -lstdc++ -fopenmp
+	  -L$(NCNN_DIR)/build-arm/src -L$(JPEG_DIR)/lib -lncnn -ljpeg \
+	  -lpthread -ldl -lstdc++ -fopenmp
 
 test_face_detect: test_face_detect.c face_detect.cpp face_detect.h
 	arm-linux-gnueabihf-gcc $(CFLAGS) -c test_face_detect.c -o test_face_detect.o
 	arm-linux-gnueabihf-g++ $(CXXFLAGS) -DEDGEGUARD_USE_NCNN \
-	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(STB_DIR) \
+	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(JPEG_DIR)/include \
 	  -c face_detect.cpp -o face_detect_ncnn.o
 	arm-linux-gnueabihf-g++ -o test_face_detect \
 	  test_face_detect.o face_detect_ncnn.o \
-	  -L$(NCNN_DIR)/build-arm/src -lncnn -lpthread -ldl -lstdc++ -fopenmp
+	  -L$(NCNN_DIR)/build-arm/src -L$(JPEG_DIR)/lib -lncnn -ljpeg \
+	  -lpthread -ldl -lstdc++ -fopenmp
+
+# Face enrollment CLI tool
+# Usage: make face_register NCNN_DIR=/home/user/ncnn JPEG_DIR=/opt/libjpeg-arm
+face_register: face_register.c face_detect.cpp face_detect.h
+	arm-linux-gnueabihf-gcc $(CFLAGS) -c face_register.c -o face_register.o
+	arm-linux-gnueabihf-g++ $(CXXFLAGS) -DEDGEGUARD_USE_NCNN \
+	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(JPEG_DIR)/include \
+	  -c face_detect.cpp -o face_detect_ncnn.o
+	arm-linux-gnueabihf-g++ -o face_register \
+	  face_register.o face_detect_ncnn.o \
+	  -L$(NCNN_DIR)/build-arm/src -L$(JPEG_DIR)/lib -lncnn -ljpeg \
+	  -lpthread -ldl -lstdc++ -fopenmp
 
 copy:
 	sudo cp sensor_hubd /home/rickyduran/sharedir
@@ -60,5 +74,5 @@ copy:
 	sudo cp edgeguard_visiond /home/rickyduran/sharedir
 
 clean:
-	rm -f sensor_hubd edgeguard_httpd edgeguard_mqttd edgeguard_visiond edgeguard_visiond_face
+	rm -f sensor_hubd edgeguard_httpd edgeguard_mqttd edgeguard_visiond edgeguard_visiond_face test_face_detect face_register
 	rm -f *.o

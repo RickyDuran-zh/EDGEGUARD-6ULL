@@ -183,17 +183,17 @@ void QtStackedWidget::mouseMoveEvent(QMouseEvent *e)
     m_nDirection = (nXoffset < 0) ? LeftDirection : RightDirection;
     m_nStartPos += nXoffset;
 
-    // Edge detection: block swipe past first/last page
-    if (RightDirection == m_nDirection && 0 == m_nCurrentIndex
-        && qAbs(m_nStartPos) > this->width() * 0.1) {
+    // Page 0 (LoginPage) and Page 1 (FaceLoginPage): absolutely no swipe
+    if (0 == m_nCurrentIndex || 1 == m_nCurrentIndex) {
         m_nStartPos -= nXoffset;
         return;
     }
-    // Page 1 (Dashboard): completely ignore right-swipe (toward login page)
-    if (RightDirection == m_nDirection && 1 == m_nCurrentIndex) {
+    // Page 2 (Dashboard): block right-swipe toward FaceLoginPage
+    if (RightDirection == m_nDirection && 2 == m_nCurrentIndex) {
         m_nStartPos -= nXoffset;
         return;
     }
+    // Last page: block left-swipe past end
     if (LeftDirection == m_nDirection && (m_children.size() - 1) == m_nCurrentIndex
         && qAbs(m_nStartPos) > this->width() * 0.1) {
         m_nStartPos -= nXoffset;
