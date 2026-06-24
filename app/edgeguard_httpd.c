@@ -726,7 +726,6 @@ static const char *get_dashboard_html(void)
 "'<span class=\"conn-dot conn-lost\"></span>离线'}}\n"
 "window._sse=es;\n"
 "}\n"
-"initSSE();\n"
 
 /* ---- tab navigation ---- */
 "function switchPage(name){\n"
