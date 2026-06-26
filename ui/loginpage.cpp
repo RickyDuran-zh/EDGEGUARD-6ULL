@@ -31,7 +31,6 @@ LoginPage::LoginPage(QWidget *parent)
     : QWidget(parent),
       m_userEdit(nullptr), m_passEdit(nullptr), m_activeField(nullptr),
       m_loginBtn(nullptr), m_errorLabel(nullptr), m_lockLabel(nullptr),
-      m_faceLoginBtn(nullptr),
       m_lockTimer(new QTimer(this)),
       m_shifted(false), m_attempts(0), m_authenticated(false), m_locked(false)
 {
@@ -146,11 +145,6 @@ void LoginPage::onLoginClicked()
 }
 
 void LoginPage::onDemoClicked() { emit demoRequested(); }
-void LoginPage::onFaceLoginClicked()
-{
-    if (m_locked) return;
-    emit faceLoginRequested();
-}
 void LoginPage::onUnlockTimer()
 {
     m_locked = false; m_attempts = 0;
@@ -255,17 +249,6 @@ void LoginPage::buildUi()
     m_loginBtn->setStyleSheet(R"(QPushButton{background:#1f6feb;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:700;}QPushButton:pressed{background:#2b80ff;}QPushButton:disabled{background:#243b58;color:#6a7d94;})");
     connect(m_loginBtn, &QPushButton::clicked, this, &LoginPage::onLoginClicked);
     btnRow->addWidget(m_loginBtn, 3);
-
-    m_faceLoginBtn = new QPushButton("人脸识别登录", this);
-    m_faceLoginBtn->setFixedHeight(36);
-    m_faceLoginBtn->setFocusPolicy(Qt::NoFocus);
-    m_faceLoginBtn->setStyleSheet(
-        "QPushButton { background: transparent; border: 1px solid #263b58; "
-        "border-radius: 8px; color: #8fb3d9; font-size: 13px; font-weight: 600; } "
-        "QPushButton:pressed { background: #1a2d45; } "
-        "QPushButton:disabled { background: #0d1a2a; color: #4a6078; }");
-    connect(m_faceLoginBtn, &QPushButton::clicked, this, &LoginPage::onFaceLoginClicked);
-    btnRow->addWidget(m_faceLoginBtn, 2);
 
     QPushButton *demoBtn = new QPushButton("演示", this);
     demoBtn->setFixedHeight(36);

@@ -575,6 +575,9 @@ static const char *get_dashboard_html(void)
 "\n"
 /* ======== JavaScript ======== */
 "<script>\n"
+"window.onerror=function(m,s,l,c,e){var d=document.getElementById('ov_state');"
+"if(d){d.style.background='#3a1111';d.querySelector('.ov-val').textContent='JS ERR';"
+"d.querySelector('.ov-lbl').textContent='L'+l+':'+m.toString().substring(0,60)}};\n"
 "var connLost=0,currentPage='dashboard',alarmData=[],camOnline=!1,lastState='',audioCtx=null;\n"
 "var reasonCN={"
 "'none':'无','motion threshold exceeded':'震动超限','motion warning':'震动告警',"
@@ -591,7 +594,7 @@ static const char *get_dashboard_html(void)
 "\n"
 "/* ---- clock ---- */\n"
 "function tick(){var d=new Date();"
-"document.getElementById('clock').textContent="
+"var cl=document.getElementById('clock');if(cl)cl.textContent="
 "('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)}\n"
 "setInterval(tick,1000);tick();\n"
 "\n"
@@ -716,7 +719,7 @@ static const char *get_dashboard_html(void)
 "fetch('/api/vision').then(function(r){return r.json()}).then(function(v){\n"
 "var on=v.camera_online||!1;camOnline=on;\n"
 "if(cs){cs.className='cam-card '+(on?'cam-ok':'cam-err');var csv=cs.querySelector('.cam-v');if(csv)csv.textContent=on?'\\u5728\\u7ebf':'\\u79bb\\u7ebf'}\n"
-"if(cm){var modeCN={monitor:'\\u76d1\\u63a7\\u6a21\\u5f0f',facelogin:'\\u4eba\\u8138\\u767b\\u5f55',tamper:'\\u9632\\u62c6\\u6a21\\u5f0f'};var md=v.mode||'monitor';var cmv=cm.querySelector('.cam-v');if(cmv)cmv.textContent=modeCN[md]||md}\n"
+"if(cm){var modeCN={monitor:'\\u76d1\\u63a7\\u6a21\\u5f0f',tamper:'\\u9632\\u62c6\\u6a21\\u5f0f'};var md=v.mode||'monitor';var cmv=cm.querySelector('.cam-v');if(cmv)cmv.textContent=modeCN[md]||md}\n"
 "if(cMo){var mot=v.motion_detected;cMo.className='cam-card '+(mot?'cam-warn':'');var cmov=cMo.querySelector('.cam-v');if(cmov)cmov.textContent=mot?'\\u68c0\\u6d4b\\u5230':'\\u65e0'}\n"
 "if(cf){var fv=cf.querySelector('.cam-v');if(fv)fv.textContent=v.face_count||0}\n"
 "if(ct){var tv=ct.querySelector('.cam-v');if(tv)tv.textContent=v.total_face_count||0}\n"
@@ -743,7 +746,7 @@ static const char *get_dashboard_html(void)
 "];\n"
 "var h='';items.forEach(function(it){var v=cfg[it.k];"
 "h+='<div class=\\\"cfg-item\\\"><span class=\\\"cfg-lbl\\\">'+it.l+'</span><div class=\\\"cfg-row\\\">'"
-"+'<input type=\\\"number\\\" class=\\\"cfg-input\\\" id=\\\"cfg_'+it.k+'\\\" value=\\\"'+(v!==undefined?v:\\\"\\\")+'\\\">'"
+"+'<input type=\\\"number\\\" class=\\\"cfg-input\\\" id=\\\"cfg_'+it.k+'\\\" value=\\\"'+(v!==undefined?v:\"\")+'\\\">'"
 "+'<button class=\\\"cfg-save\\\" onclick=\\\"saveCfg(\\\\x27'+it.k+'\\\\x27)\\\">\\u4fdd\\u5b58</button>'"
 "+'<span class=\\\"cfg-ok\\\" id=\\\"ok_'+it.k+'\\\">\\u2713</span></div></div>'})\n"
 "g.innerHTML=h;\n"
@@ -761,7 +764,7 @@ static const char *get_dashboard_html(void)
 "}\n"
 "function toggleConfig(key,el){\n"
 "var on=!el.classList.contains('on');\n"
-"var body=JSON.stringify({cmd:'set_config',key:key,value:on?'true':'false'});\n"
+"var body=JSON.stringify({cmd:'set_config',key:key,value:on?1:0});\n"
 "fetch('/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:body,credentials:'include'}).then(function(r){\n"
 "if(r.ok){if(on)el.classList.add('on');else el.classList.remove('on')}\n"
 "}).catch(function(){});\n"
@@ -828,7 +831,7 @@ static const char *get_dashboard_html(void)
 "}\n"
 "\n"
 /* ---- startup ---- */
-"setInterval(refresh,1000);refresh();\n"
+"setInterval(refresh,500);refresh();\n"
 "setInterval(function(){if(currentPage==='camera')refreshCamera()},3000);\n"
 "</script>\n"
 "</body>\n"
@@ -1309,7 +1312,7 @@ static void *connection_handler(void *arg)
             snprintf(vision_buf, sizeof(vision_buf),
                      "{\"camera_online\":false,\"motion_detected\":false,"
                      "\"face_count\":0,\"snapshot_path\":null,"
-                     "\"inference_ms\":0,\"face_verify_result\":null}\n");
+                     "\"inference_ms\":0}\n");
             n = (int)strlen(vision_buf);
         }
         size_t blen = (size_t)n;
@@ -1449,7 +1452,7 @@ int main(int argc, char *argv[])
     }
 
     snprintf(g_cmd_tmp_path, sizeof(g_cmd_tmp_path),
-             "%s.tmp", g_cmd_path);
+             "%s.httpd.tmp", g_cmd_path);
 
     signal(SIGINT,  handle_signal);
     signal(SIGTERM, handle_signal);

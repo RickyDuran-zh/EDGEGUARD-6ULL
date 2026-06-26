@@ -8,7 +8,6 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     loginpage.cpp \
-    faceloginpage.cpp \
     circulargauge.cpp \
     qtstackedwidget.cpp \
     sensorchart.cpp
@@ -16,7 +15,6 @@ SOURCES += \
 HEADERS += \
     mainwindow.h \
     loginpage.h \
-    faceloginpage.h \
     circulargauge.h \
     qtstackedwidget.h \
     sensorchart.h

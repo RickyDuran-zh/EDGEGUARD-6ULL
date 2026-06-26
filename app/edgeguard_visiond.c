@@ -37,9 +37,8 @@
 
 /* ---- visiond operation modes ---- */
 typedef enum {
-    MODE_MONITOR   = 0,  /* default: 2s interval, motion-triggered face detect */
-    MODE_FACELOGIN = 1,  /* 300ms interval, preview frame, every-frame face detect */
-    MODE_TAMPER    = 2,  /* 2s interval, motion detect + occlusion check */
+    MODE_MONITOR   = 0,  /* motion + face + tamper detection */
+    MODE_TAMPER    = 1,  /* motion + face + occlusion detection */
 } vision_mode_t;
 
 /* Occlusion detection: consecutive frames below this size → tamper */
@@ -50,7 +49,6 @@ typedef enum {
 static volatile int g_running = 1;
 static char   g_device[256];
 static int    g_interval_ms = DEFAULT_INTERVAL_MS;
-static int    g_snapshot_count = 0;
 static vision_mode_t g_mode = MODE_MONITOR;
 static int    g_tamper_streak = 0;  /* consecutive small frames in tamper mode */
 static time_t g_last_cmd_mtime = 0; /* for cmd file change detection */
@@ -107,9 +105,7 @@ static int ensure_dir(const char *path)
     return mkdir(path, 0755);
 }
 
-/* ---- cmd channel (same mechanism as sensor_hubd) ---- */
-#define PREVIEW_JPEG_PATH   "/tmp/edgeguard_camera_preview.jpg"
-#define PREVIEW_JPEG_TMP    "/tmp/edgeguard_camera_preview.jpg.tmp"
+/* ---- cmd channel ---- */
 #define CMD_JSON_PATH       "/tmp/edgeguard_cmd.json"
 
 static void check_cmd_file(void)
@@ -150,9 +146,7 @@ static void check_cmd_file(void)
     if (mode_str[0] == '\0') return;
 
     vision_mode_t new_mode = MODE_MONITOR;
-    if (!strcmp(mode_str, "facelogin"))
-        new_mode = MODE_FACELOGIN;
-    else if (!strcmp(mode_str, "tamper"))
+    if (!strcmp(mode_str, "tamper"))
         new_mode = MODE_TAMPER;
     else if (!strcmp(mode_str, "monitor"))
         new_mode = MODE_MONITOR;
@@ -172,19 +166,16 @@ static void check_cmd_file(void)
     unlink(CMD_JSON_PATH);
 }
 
-/* Delete oldest snapshot(s) to stay under MAX_SNAPSHOTS */
+/* Delete oldest snapshot(s) to stay under MAX_SNAPSHOTS.
+   Uses actual file count on disk, not the in-memory counter. */
 static void cleanup_old_snapshots(const char *dir)
 {
-    if (g_snapshot_count <= MAX_SNAPSHOTS) return;
-    /* Simple: delete all snapshots when we hit the limit.
-       A production system would delete the oldest by timestamp. */
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "ls -t %s/*.jpg 2>/dev/null | tail -n +%d | xargs rm -f 2>/dev/null",
              dir, MAX_SNAPSHOTS + 1);
     int sys_ret = system(cmd);
     (void)sys_ret;  /* best-effort cleanup, ignore failures */
-    g_snapshot_count = MAX_SNAPSHOTS;
 }
 
 /* ---- motion detection ---- */
@@ -201,9 +192,7 @@ static int detect_motion(size_t cur_size, size_t prev_size)
 /* ---- JSON writer ---- */
 static void write_vision_json(int camera_online, int motion_detected,
                                int face_count, const char *snapshot_path,
-                               long inference_ms, int tamper_detected,
-                               int verify_matched, const char *verify_user,
-                               float verify_confidence)
+                               long inference_ms, int tamper_detected)
 {
     char ts[64];
     time_t now = time(NULL);
@@ -216,9 +205,7 @@ static void write_vision_json(int camera_online, int motion_detected,
 
     const char *sp = (snapshot_path && snapshot_path[0]) ? snapshot_path : NULL;
 
-    const char *mode_str = "monitor";
-    if (g_mode == MODE_FACELOGIN) mode_str = "facelogin";
-    else if (g_mode == MODE_TAMPER)  mode_str = "tamper";
+    const char *mode_str = (g_mode == MODE_TAMPER) ? "tamper" : "monitor";
 
     fprintf(fp, "{\n");
     fprintf(fp, "  \"mode\": \"%s\",\n", mode_str);
@@ -234,21 +221,10 @@ static void write_vision_json(int camera_online, int motion_detected,
         fprintf(fp, "  \"snapshot_path\": \"%s\",\n", sp);
     else
         fprintf(fp, "  \"snapshot_path\": null,\n");
-    fprintf(fp, "  \"preview_path\": \"%s\",\n",
-            (g_mode == MODE_FACELOGIN) ? PREVIEW_JPEG_PATH : "null");
     fprintf(fp, "  \"tamper_detected\": %s,\n",
             tamper_detected ? "true" : "false");
     fprintf(fp, "  \"inference_ms\": %ld,\n", inference_ms);
-    fprintf(fp, "  \"timestamp\": \"%s\",\n", ts);
-    if (verify_matched) {
-        fprintf(fp, "  \"face_verify_result\": {\n");
-        fprintf(fp, "    \"matched\": true,\n");
-        fprintf(fp, "    \"user_id\": \"%s\",\n", verify_user);
-        fprintf(fp, "    \"confidence\": %.2f\n", verify_confidence);
-        fprintf(fp, "  }\n");
-    } else {
-        fprintf(fp, "  \"face_verify_result\": null\n");
-    }
+    fprintf(fp, "  \"timestamp\": \"%s\"\n", ts);
     fprintf(fp, "}\n");
 
     fclose(fp);
@@ -309,9 +285,8 @@ int main(int argc, char *argv[])
     /* restore cumulative face count from previous runs */
     load_face_count();
 
-    /* initialize face detection + recognition (stub if ncnn not available) */
+    /* initialize face detection (stub if ncnn not available) */
     face_detect_init("/etc/edgeguard/models");
-    face_recog_init("/etc/edgeguard/models");
 
     printf("[visiond] starting  device=%s  %ux%u  interval=%d ms\n",
            g_device, width, height, g_interval_ms);
@@ -324,7 +299,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "[visiond] camera open failed: %s\n",
                     camera_error(NULL));
             /* Write offline status so consumers know camera is down. */
-            write_vision_json(0, 0, 0, "null", 0, 0, 0, "", 0.0f);
+            write_vision_json(0, 0, 0, "null", 0, 0);
             /* retry after interval */
             msleep_user(g_interval_ms);
             continue;
@@ -352,10 +327,12 @@ int main(int argc, char *argv[])
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
 
+            frame.data = NULL;  /* safety: ensure clean state before capture */
             int ret = camera_capture(cam, &frame);
             if (ret < 0) {
                 fprintf(stderr, "[visiond] capture failed: %s\n",
                         camera_error(cam));
+                free(frame.data);  /* defensive: free partial allocation if any */
                 camera_online = 0;
                 break;
             }
@@ -373,51 +350,7 @@ int main(int argc, char *argv[])
             long elapsed_ms = (t1.tv_sec - t0.tv_sec) * 1000L +
                               (t1.tv_nsec - t0.tv_nsec) / 1000000L;
 
-            /* ---- MODE FACELOGIN: high-frequency preview + face detect ---- */
-            if (g_mode == MODE_FACELOGIN) {
-                /* write preview JPEG for UI to display */
-                FILE *prev_fp = fopen(PREVIEW_JPEG_TMP, "wb");
-                if (prev_fp) {
-                    fwrite(frame.data, 1, frame.size, prev_fp);
-                    fclose(prev_fp);
-                    rename(PREVIEW_JPEG_TMP, PREVIEW_JPEG_PATH);
-                }
-
-                /* run face detection + verification every frame */
-                int face_count = 0;
-                char match_user[64] = {0};
-                float match_conf = 0.0f;
-                face_detect_run(frame.data, (int)frame.size, &face_count);
-                face_verify_run(frame.data, (int)frame.size,
-                                match_user, sizeof(match_user), &match_conf);
-
-                /* accumulate face count and remember snapshot path */
-                if (face_count > 0) {
-                    g_total_face_count += face_count;
-                    snprintf(g_last_face_snap, sizeof(g_last_face_snap),
-                             "%s", PREVIEW_JPEG_PATH);
-                }
-
-                /* total inference time (capture + face detect + verify) */
-                struct timespec t2;
-                clock_gettime(CLOCK_MONOTONIC, &t2);
-                long total_ms = (t2.tv_sec - t0.tv_sec) * 1000L +
-                                (t2.tv_nsec - t0.tv_nsec) / 1000000L;
-
-                write_vision_json(camera_online, 0, face_count,
-                                  PREVIEW_JPEG_PATH, total_ms, 0,
-                                  match_user[0] ? 1 : 0,
-                                  match_user, match_conf);
-                free(frame.data);
-
-                /* sleep ~300ms between preview frames */
-                long remain = 300 - elapsed_ms;
-                if (remain > 0)
-                    msleep_user((unsigned int)remain);
-                continue;
-            }
-
-            /* ---- MODE TAMPER / MONITOR: motion detection ---- */
+            /* ---- unified detection: motion + face + tamper ---- */
             size_t old_size = prev_size;
             motion_detected = detect_motion(frame.size, prev_size);
             prev_size = frame.size;
@@ -445,16 +378,14 @@ int main(int argc, char *argv[])
 
             /* face detection — only run when motion triggers, saves CPU */
             int face_count = 0;
-            if (motion_detected) {
-                face_detect_run(frame.data, (int)frame.size, &face_count);
-                if (face_count > 0) {
-                    printf("[visiond] FACE detected  count=%d\n", face_count);
-                    g_total_face_count += face_count;
-                    g_last_face_count = face_count;
-                    g_face_latch_left = 5;  /* hold for ~10s (5 cycles × 2s) */
-                }
+            face_detect_run(frame.data, (int)frame.size, &face_count);
+            if (face_count > 0) {
+                printf("[visiond] FACE detected  count=%d\n", face_count);
+                g_total_face_count += face_count;
+                g_last_face_count = face_count;
+                g_face_latch_left = 5;  /* hold for ~10s (5 cycles × 2s) */
             }
-            /* latch: keep showing last face count for N cycles after motion stops */
+            /* latch: keep showing last face count for N cycles after faces gone */
             if (g_face_latch_left > 0) {
                 if (face_count == 0)
                     face_count = g_last_face_count;
@@ -469,22 +400,25 @@ int main(int argc, char *argv[])
             long total_ms = (t2.tv_sec - t0.tv_sec) * 1000L +
                             (t2.tv_nsec - t0.tv_nsec) / 1000000L;
 
-            /* save snapshot */
+            /* save snapshot — only when something meaningful happened */
             snapshot_path[0] = '\0';
-            time_t now = time(NULL);
-            struct tm tm_buf;
-            localtime_r(&now, &tm_buf);
-            char ts_file[32];
-            strftime(ts_file, sizeof(ts_file), "%Y%m%d_%H%M%S", &tm_buf);
-            snprintf(snapshot_path, sizeof(snapshot_path),
-                     "%s/%s.jpg", SNAPSHOT_DIR, ts_file);
+            if (motion_detected || face_count > 0 || tamper_detected) {
+                time_t now = time(NULL);
+                struct tm tm_buf;
+                localtime_r(&now, &tm_buf);
+                char ts_file[32];
+                strftime(ts_file, sizeof(ts_file), "%Y%m%d_%H%M%S", &tm_buf);
+                snprintf(snapshot_path, sizeof(snapshot_path),
+                         "%s/%s.jpg", SNAPSHOT_DIR, ts_file);
 
-            FILE *fp = fopen(snapshot_path, "wb");
-            if (fp) {
-                fwrite(frame.data, 1, frame.size, fp);
-                fclose(fp);
-                g_snapshot_count++;
-                cleanup_old_snapshots(SNAPSHOT_DIR);
+                FILE *fp = fopen(snapshot_path, "wb");
+                if (fp) {
+                    fwrite(frame.data, 1, frame.size, fp);
+                    fclose(fp);
+                    cleanup_old_snapshots(SNAPSHOT_DIR);
+                } else {
+                    snprintf(snapshot_path, sizeof(snapshot_path), "null");
+                }
             } else {
                 snprintf(snapshot_path, sizeof(snapshot_path), "null");
             }
@@ -498,7 +432,7 @@ int main(int argc, char *argv[])
             /* write JSON for consumers */
             write_vision_json(camera_online, motion_detected,
                               face_count, snapshot_path, total_ms,
-                              tamper_detected, 0, "", 0.0f);
+                              tamper_detected);
 
             if (motion_detected)
                 printf("[visiond] MOTION detected  size_change=%zu→%zu  "
@@ -519,7 +453,7 @@ int main(int argc, char *argv[])
 
         /* write offline status */
         if (g_running)
-            write_vision_json(0, 0, 0, "null", 0, 0, 0, "", 0.0f);
+            write_vision_json(0, 0, 0, "null", 0, 0);
     }
 
     save_face_count();

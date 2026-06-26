@@ -45,26 +45,13 @@ edgeguard_visiond_face: edgeguard_visiond.c camera_v4l2.c face_detect.cpp camera
 	  -L$(NCNN_DIR)/build-arm/src -L$(JPEG_DIR)/lib -lncnn -ljpeg \
 	  -lpthread -ldl -lstdc++ -fopenmp
 
-# Face enrollment CLI tool
-# Usage: make face_register NCNN_DIR=/home/user/ncnn JPEG_DIR=/opt/libjpeg-arm
-face_register: face_register.c face_detect.cpp face_detect.h
-	arm-linux-gnueabihf-gcc $(CFLAGS) -c face_register.c -o face_register.o
-	arm-linux-gnueabihf-g++ $(CXXFLAGS) -DEDGEGUARD_USE_NCNN \
-	  -I$(NCNN_DIR)/src -I$(NCNN_DIR)/build-arm/src -I$(JPEG_DIR)/include \
-	  -c face_detect.cpp -o face_detect_ncnn.o
-	arm-linux-gnueabihf-g++ -o face_register \
-	  face_register.o face_detect_ncnn.o \
-	  -L$(NCNN_DIR)/build-arm/src -L$(JPEG_DIR)/lib -lncnn -ljpeg \
-	  -lpthread -ldl -lstdc++ -fopenmp
-
 copy:
 	sudo cp sensor_hubd /home/rickyduran/sharedir
 	sudo cp edgeguard_httpd /home/rickyduran/sharedir
 	sudo cp edgeguard_mqttd /home/rickyduran/sharedir
 	sudo cp edgeguard_visiond /home/rickyduran/sharedir
 	sudo cp edgeguard_visiond_face /home/rickyduran/sharedir
-	sudo cp face_register /home/rickyduran/sharedir
 
 clean:
-	rm -f sensor_hubd edgeguard_httpd edgeguard_mqttd edgeguard_visiond edgeguard_visiond_face face_register
+	rm -f sensor_hubd edgeguard_httpd edgeguard_mqttd edgeguard_visiond edgeguard_visiond_face
 	rm -f *.o

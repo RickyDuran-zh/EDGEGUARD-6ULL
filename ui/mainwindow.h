@@ -10,7 +10,6 @@
 #include <QVector>
 
 class LoginPage;
-class FaceLoginPage;
 class CircularGauge;
 class QtStackedWidget;
 class SensorChart;
@@ -32,8 +31,6 @@ private slots:
     void onAckClicked();
     void onLoginSuccess();
     void onDemoRequested();
-    void onFaceLoginRequested();
-    void onFaceLoginCancel();
 
 private:
     void parseArguments();
@@ -115,7 +112,6 @@ private:
 
     // Login
     LoginPage *m_loginPage;
-    FaceLoginPage *m_faceLoginPage;
     QWidget *m_bottomBar;
     bool m_authenticated;
 };

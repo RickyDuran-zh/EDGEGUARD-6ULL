@@ -56,6 +56,8 @@
 #define BUZZER_BEEP_MS    200
 #define MIN_ALARM_DURATION_MS  2000  /* minimum time in WARNING/ALARM/FAULT before returning to NORMAL */
 #define MOTION_NOISE_FLOOR     30    /* ignore motion delta below this (MPU6050 resting noise ~12-24) */
+#define MAX_ALARM_ROWS         5000   /* auto-delete oldest when exceeded */
+#define ALARM_RETAIN_ROWS      3000   /* keep this many newest after cleanup */
 /* MPU6050 temperature: raw → Celsius (datasheet formula) */
 #define MPU_TEMP_TO_C(raw)     ((raw) / 340.0 + 36.53)
 
@@ -544,6 +546,27 @@ static void db_log_alarm(const char *state_str, const char *reason,
     sqlite3_bind_int(stmt,   8, acknowledged);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+
+    /* auto-prune: keep DB bounded */
+    {
+        sqlite3_stmt *cs = NULL;
+        if (sqlite3_prepare_v2(g_db,
+                "SELECT COUNT(*) FROM alarm_events", -1, &cs, NULL) == SQLITE_OK) {
+            if (sqlite3_step(cs) == SQLITE_ROW) {
+                int count = sqlite3_column_int(cs, 0);
+                if (count > MAX_ALARM_ROWS) {
+                    char del[128];
+                    snprintf(del, sizeof(del),
+                             "DELETE FROM alarm_events WHERE id NOT IN "
+                             "(SELECT id FROM alarm_events "
+                             " ORDER BY id DESC LIMIT %d)",
+                             ALARM_RETAIN_ROWS);
+                    sqlite3_exec(g_db, del, NULL, NULL, NULL);
+                }
+            }
+            sqlite3_finalize(cs);
+        }
+    }
 }
 
 static void db_close(void)
@@ -590,7 +613,11 @@ static void write_status_json(const struct app_config *cfg,
                               int motion_delta)
 {
     FILE *fp = fopen(STATUS_JSON_TMP, "w");
-    if (!fp) return;
+    if (!fp) {
+        fprintf(stderr, "[ERR] write_status_json: cannot open %s — %s\n",
+                STATUS_JSON_TMP, strerror(errno));
+        return;
+    }
 
     char ip[64] = "N/A";
     get_network_info(ip, sizeof(ip));
@@ -744,7 +771,7 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         }
     }
 
-    if (cmd[0] == '\0') { unlink(CMD_JSON_PATH); return; }
+    if (cmd[0] == '\0') { return; }  /* not our command — leave for visiond */
 
     printf("[INFO] cmd received: %s\n", cmd);
 
@@ -753,6 +780,8 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         write_text_device(EDGE_BUZZER_DEV, "off");
         snprintf(g_cur_buzzer, sizeof(g_cur_buzzer), "off");
         log_event(cfg, "INFO", "buzzer muted");
+        unlink(CMD_JSON_PATH);
+        return;
     } else if (!strcmp(cmd, "ack_alarm")) {
         g_acknowledged = 1;
         g_muted = 1;
@@ -763,6 +792,8 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         snprintf(g_cur_led, sizeof(g_cur_led), "green");
         snprintf(g_cur_buzzer, sizeof(g_cur_buzzer), "off");
         log_event(cfg, "INFO", "alarm acknowledged");
+        unlink(CMD_JSON_PATH);
+        return;
     } else if (!strcmp(cmd, "demo_alarm")) {
         g_alarm_count++;
         g_last_alarm_time = time(NULL);
@@ -770,7 +801,16 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         g_muted = 0;
         *state = STATE_ALARM;
         g_non_normal_since_ms = uptime_ms();  /* ensure alarm lasts MIN_ALARM_DURATION_MS */
+        /* immediate LED/buzzer update */
+        g_led_on = 0;
+        g_last_led_toggle_ms = 0;
+        write_text_device(EDGE_LEDS_DEV, "red");
+        write_text_device(EDGE_BUZZER_DEV, "beep");
+        snprintf(g_cur_led, sizeof(g_cur_led), "red");
+        snprintf(g_cur_buzzer, sizeof(g_cur_buzzer), "beep");
         log_event(cfg, "INFO", "demo alarm triggered");
+        unlink(CMD_JSON_PATH);
+        return;
     } else if (!strcmp(cmd, "set_config")) {
         /* parse "key" and "value" fields */
         char key[64] = {0};
@@ -786,16 +826,28 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
         }
         if (vp) {
             vp = strchr(vp, ':');
-            if (vp) { vp++; while (*vp == ' ') vp++; val = atoi(vp); has_val = 1; }
+            if (vp) { vp++; while (*vp == ' ') vp++;
+                /* handle boolean strings "true"/"false" OR integers */
+                if (strncmp(vp, "\"true\"", 6) == 0 || strncmp(vp, "true", 4) == 0)
+                    { val = 1; has_val = 1; }
+                else if (strncmp(vp, "\"false\"", 7) == 0 || strncmp(vp, "false", 5) == 0)
+                    { val = 0; has_val = 1; }
+                else
+                    { val = atoi(vp); has_val = 1; }
+            }
         }
         if (key[0] && has_val) {
             /* update in-memory config */
+            int is_bool = 0;
             if      (!strcmp(key, "sample_interval_ms"))       cfg->interval_ms       = val;
             else if (!strcmp(key, "als_low_threshold"))        cfg->als_low_th        = val;
             else if (!strcmp(key, "ps_warning_threshold"))     cfg->ps_warning_th     = val;
             else if (!strcmp(key, "ps_alarm_threshold"))       cfg->ps_alarm_th       = val;
             else if (!strcmp(key, "motion_warning_threshold")) cfg->motion_warning_th = val;
             else if (!strcmp(key, "motion_alarm_threshold"))   cfg->motion_alarm_th   = val;
+            else if (!strcmp(key, "buzzer_enable")) { cfg->buzzer_enable = val; is_bool = 1; }
+            else if (!strcmp(key, "led_enable"))    { cfg->led_enable    = val; is_bool = 1; }
+            else if (!strcmp(key, "log_enable"))    { cfg->log_enable    = val; is_bool = 1; }
             else key[0] = '\0';  /* unknown key */
             if (key[0]) {
                 /* persist to config file */
@@ -810,22 +862,27 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
                         "  \"ps_alarm_threshold\": %d,\n"
                         "  \"motion_warning_threshold\": %d,\n"
                         "  \"motion_alarm_threshold\": %d,\n"
-                        "  \"buzzer_enable\": true,\n"
-                        "  \"led_enable\": true,\n"
-                        "  \"log_enable\": true\n"
+                        "  \"buzzer_enable\": %s,\n"
+                        "  \"led_enable\": %s,\n"
+                        "  \"log_enable\": %s\n"
                         "}\n",
                         cfg->interval_ms,
                         cfg->als_low_th,
                         cfg->ps_warning_th,
                         cfg->ps_alarm_th,
                         cfg->motion_warning_th,
-                        cfg->motion_alarm_th);
+                        cfg->motion_alarm_th,
+                        cfg->buzzer_enable ? "true" : "false",
+                        cfg->led_enable    ? "true" : "false",
+                        cfg->log_enable    ? "true" : "false");
                     fclose(f);
                     printf("[INFO] config updated: %s=%d\n", key, val);
                     log_event(cfg, "INFO", "config updated via cmd");
                 }
             }
         }
+        unlink(CMD_JSON_PATH);
+        return;
     } else if (!strcmp(cmd, "delete_old_alarms")) {
         /* parse "keep" field — keep newest N records */
         int keep = 100;
@@ -851,9 +908,11 @@ static void check_cmd_file(struct app_config *cfg, enum alarm_state *state)
                 if (err) sqlite3_free(err);
             }
         }
+        unlink(CMD_JSON_PATH);
+        return;
     }
 
-    unlink(CMD_JSON_PATH);
+    /* unknown command — leave file for other consumers (e.g. visiond) */
 }
 
 /* ---- state machine ---- */
@@ -881,7 +940,7 @@ static enum alarm_state evaluate_state(const struct app_config *cfg,
     }
 
     /* ALARM level — tamper takes highest priority, then face intrusion */
-    if (vis->valid && vis->tamper_detected)
+    if (vis->valid && vis->camera_online && vis->tamper_detected)
         return STATE_ALARM;
 
     if (vis->valid && vis->camera_online && vis->face_count > 0)
@@ -1189,11 +1248,11 @@ int main(int argc, char *argv[])
             g_non_normal_since_ms = 0;  /* reset */
         }
 
-        /* LED / buzzer blink */
-        apply_blink(state, &cfg, now_ms);
-
-        /* check command channel */
+        /* check command channel (may change state) */
         check_cmd_file(&cfg, &state);
+
+        /* LED / buzzer blink (after cmd check, uses final state) */
+        apply_blink(state, &cfg, now_ms);
 
         /* write JSON status */
         write_status_json(&cfg, &mpu, &ap, &vis, state, motion_delta);

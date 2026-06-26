@@ -92,8 +92,6 @@ if echo "$TAGS" | grep -qw "visiond"; then
     build_step "[visiond] edgeguard_visiond (stub)" edgeguard_visiond edgeguard_visiond
     build_step "[visiond] edgeguard_visiond_face (ncnn)" edgeguard_visiond_face edgeguard_visiond_face \
         NCNN_DIR="$NCNN_DIR" JPEG_DIR="$JPEG_DIR"
-    build_step "[visiond] face_register" face_register face_register \
-        NCNN_DIR="$NCNN_DIR" JPEG_DIR="$JPEG_DIR"
 fi
 
 # ---- ui ----

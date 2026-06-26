@@ -1,6 +1,5 @@
 #include "mainwindow.h"
 #include "loginpage.h"
-#include "faceloginpage.h"
 #include "circulargauge.h"
 #include "qtstackedwidget.h"
 #include "sensorchart.h"
@@ -11,6 +10,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QJsonDocument>
@@ -23,6 +23,7 @@
 static const char *kBaseStyle = R"(
     QMainWindow { background: #07111f; }
     QWidget { background: #07111f; color: #e6eef8; }
+    QPushButton { outline: none; }
     QLabel { color: #e6eef8; }
     QFrame#Card {
         background: #101d2f;
@@ -71,7 +72,7 @@ static const char *kBaseStyle = R"(
 )";
 
 static const int kMaxFailures     = 3;
-static const char *kCmdTmpPath    = "/tmp/edgeguard_cmd.json.tmp";
+static const char *kCmdTmpPath    = "/tmp/edgeguard_cmd.json.ui.tmp";
 static const char *kCmdPath       = "/tmp/edgeguard_cmd.json";
 
 MainWindow::MainWindow(QWidget *parent)
@@ -118,7 +119,6 @@ MainWindow::MainWindow(QWidget *parent)
       m_topBar(nullptr),
       m_logoutBtn(nullptr),
       m_loginPage(nullptr),
-      m_faceLoginPage(nullptr),
       m_bottomBar(nullptr),
       m_authenticated(false)
 {
@@ -128,11 +128,6 @@ MainWindow::MainWindow(QWidget *parent)
     if (m_loginPage) {
         connect(m_loginPage, &LoginPage::loginSuccess, this, &MainWindow::onLoginSuccess);
         connect(m_loginPage, &LoginPage::demoRequested, this, &MainWindow::onDemoRequested);
-        connect(m_loginPage, &LoginPage::faceLoginRequested, this, &MainWindow::onFaceLoginRequested);
-    }
-    if (m_faceLoginPage) {
-        connect(m_faceLoginPage, &FaceLoginPage::faceLoginCancel, this, &MainWindow::onFaceLoginCancel);
-        connect(m_faceLoginPage, &FaceLoginPage::faceLoginSuccess, this, &MainWindow::onLoginSuccess);
     }
     if (m_demoMode)
         onDemoRequested();
@@ -205,26 +200,24 @@ void MainWindow::buildUi()
     m_stack = new QtStackedWidget(root);
     bodyLayout->addWidget(m_stack, 1);
     m_loginPage = new LoginPage(root);
-    m_faceLoginPage = new FaceLoginPage(root);
     m_stack->addWidget(m_loginPage);         // 0: Login
-    m_stack->addWidget(m_faceLoginPage);     // 1: FaceLogin (preview)
-    m_stack->addWidget(buildDashboardPage());// 2: Dashboard
-    m_stack->addWidget(buildSensorPage());   // 3: Sensors
-    m_stack->addWidget(buildAlarmPage());    // 4: Alarms
-    m_stack->addWidget(buildSystemPage());   // 5: System
-    m_stack->addWidget(buildVisionPage());   // 6: Vision
-    m_stack->addWidget(buildChartPage());    // 7: Chart
+    m_stack->addWidget(buildDashboardPage());// 1: Dashboard
+    m_stack->addWidget(buildSensorPage());   // 2: Sensors
+    m_stack->addWidget(buildAlarmPage());    // 3: Alarms
+    m_stack->addWidget(buildSystemPage());   // 4: System
+    m_stack->addWidget(buildVisionPage());   // 5: Vision
+    m_stack->addWidget(buildChartPage());    // 6: Chart
 
     rootLayout->addLayout(bodyLayout, 1);
 
-    /* ---- bottom navigation bar (hidden on login + facelogin) ---- */
+    /* ---- bottom navigation bar (hidden on login) ---- */
     m_bottomBar = buildBottomBar();
     m_bottomBar->hide();
     rootLayout->addWidget(m_bottomBar);
 
     /* swipe gestures also update bottom bar highlight */
     connect(m_stack, &QtStackedWidget::currentChanged, this, [this](int idx) {
-        updateNavStyle(idx - 2);  // page 2=Dashboard=nav[0]
+        updateNavStyle(idx - 1);  // page 1=Dashboard=nav[0]
     });
 
     setCentralWidget(root);
@@ -261,7 +254,7 @@ QWidget *MainWindow::buildBottomBar()
             "QPushButton { background: transparent; color: #9fb5cc; "
             "border: none; border-radius: 6px; font-size: 12px; font-weight: 600; } "
             "QPushButton:pressed { background: #2b80ff; }");
-        connect(btn, &QPushButton::clicked, this, [this, i]() { switchPage(i + 2, false); });
+        connect(btn, &QPushButton::clicked, this, [this, i]() { switchPage(i + 1, false); });
         layout->addWidget(btn);
         m_bottomButtons.push_back(btn);
     }
@@ -563,34 +556,34 @@ void MainWindow::switchPage(int index, bool animated)
 {
     if (!m_stack || index < 0 || index >= m_stack->count())
         return;
-    // auth gate: pages 0 (Login) and 1 (FaceLogin) are pre-auth
-    if (!m_authenticated && index > 1 && !m_demoMode)
+    // auth gate: page 0 (Login) is pre-auth
+    if (!m_authenticated && index > 0 && !m_demoMode)
         return;
-    // swipe guard: block navigating back to login/faceLogin pages once authenticated
-    if (m_authenticated && index <= 1)
+    // swipe guard: block navigating back to login page once authenticated
+    if (m_authenticated && index <= 0)
         return;
     if (m_stack->currentIndex() == index) return;
 
-    // top bar: hidden on login + facelogin, shown on authenticated pages
+    // top bar: hidden on login, shown on authenticated pages
     if (m_topBar)
-        m_topBar->setVisible(index > 1);
+        m_topBar->setVisible(index > 0);
 
-    // bottom bar: hidden on login + facelogin, shown on authenticated pages
+    // bottom bar: hidden on login, shown on authenticated pages
     if (m_bottomBar)
-        m_bottomBar->setVisible(index > 1);
+        m_bottomBar->setVisible(index > 0);
 
-    // Login + FaceLogin pages: disable swipe; authenticated pages: enable swipe
-    m_stack->setPressMove(index > 1);
+    // Login page: disable swipe; authenticated pages: enable swipe
+    m_stack->setPressMove(index > 0);
 
-    // All transitions from pre-auth pages (0,1) are instant;
+    // transitions from pre-auth page (0) are instant;
     // swipe-driven transitions on authenticated pages are animated
-    if (!animated || m_stack->currentIndex() <= 1)
+    if (!animated || m_stack->currentIndex() <= 0)
         m_stack->setCurrentIndexNoAnim(index);
     else
         m_stack->setCurrentIndex(index);
 
     // highlight button after page actually changes (nav[0]=Dashboard=page2)
-    updateNavStyle(index - 2);
+    updateNavStyle(index - 1);
 }
 
 void MainWindow::updateNavStyle(int visual)
@@ -613,12 +606,12 @@ void MainWindow::updateNavStyle(int visual)
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
-    case Qt::Key_1: switchPage(2); break;  // Dashboard
-    case Qt::Key_2: switchPage(3); break;  // Sensors
-    case Qt::Key_3: switchPage(4); break;  // Alarms
-    case Qt::Key_4: switchPage(5); break;  // System
-    case Qt::Key_5: switchPage(6); break;  // Vision
-    case Qt::Key_6: switchPage(7); break;  // Chart
+    case Qt::Key_1: switchPage(1); break;  // Dashboard
+    case Qt::Key_2: switchPage(2); break;  // Sensors
+    case Qt::Key_3: switchPage(3); break;  // Alarms
+    case Qt::Key_4: switchPage(4); break;  // System
+    case Qt::Key_5: switchPage(5); break;  // Vision
+    case Qt::Key_6: switchPage(6); break;  // Chart
     case Qt::Key_Escape: close(); break;
     default: QMainWindow::keyPressEvent(event); break;
     }
@@ -628,8 +621,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 void MainWindow::onLoginSuccess()
 {
     m_authenticated = true;
-    sendCommand("vision_mode", "tamper");
-    switchPage(2);
+    sendCommand("vision_mode", "monitor");
+    switchPage(1);  // Dashboard
 }
 
 void MainWindow::onDemoRequested()
@@ -637,23 +630,8 @@ void MainWindow::onDemoRequested()
     m_demoMode = true;
     m_authenticated = true;
     m_demoTimer.start();
-    sendCommand("vision_mode", "tamper");
-    switchPage(2);
-}
-
-void MainWindow::onFaceLoginRequested()
-{
-    sendCommand("vision_mode", "facelogin");
-    if (m_faceLoginPage) m_faceLoginPage->startPreview();
-    switchPage(1);  // → FaceLoginPage
-}
-
-void MainWindow::onFaceLoginCancel()
-{
-    if (m_faceLoginPage) m_faceLoginPage->stopPreview();
     sendCommand("vision_mode", "monitor");
-    if (m_loginPage) m_loginPage->reset();
-    switchPage(0);  // → LoginPage
+    switchPage(1);  // Dashboard
 }
 
 /* ---- Command channel ---- */
@@ -1069,6 +1047,13 @@ void MainWindow::refreshStatus()
     bool demo = m_demoMode;
 
     if (!demo) {
+        /* staleness check: if status.json hasn't been updated in 3+ seconds,
+           sensor_hubd may have crashed or be stuck — show service lost */
+        QFileInfo fi(m_statusPath);
+        if (!fi.exists() || fi.lastModified().secsTo(QDateTime::currentDateTime()) > 3) {
+            applyServiceLost();
+            return;
+        }
         if (!loadStatusFromFile(&obj)) {
             applyServiceLost();
             return;
@@ -1077,5 +1062,6 @@ void MainWindow::refreshStatus()
         obj = makeDemoStatus();
     }
 
+    m_consecutiveFailures = 0;  /* reset on successful read */
     applyStatus(obj, demo);
 }

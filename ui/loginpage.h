@@ -21,13 +21,11 @@ public:
 signals:
     void loginSuccess();
     void demoRequested();
-    void faceLoginRequested();
 
 private slots:
     void onKeyClicked();
     void onLoginClicked();
     void onDemoClicked();
-    void onFaceLoginClicked();
     void onUnlockTimer();
 
 private:
@@ -42,7 +40,6 @@ private:
     QPushButton *m_loginBtn;
     QLabel *m_errorLabel;
     QLabel *m_lockLabel;
-    QPushButton *m_faceLoginBtn;
     QTimer *m_lockTimer;
     QVector<QPushButton*> m_letterKeys;
     bool m_shifted;
