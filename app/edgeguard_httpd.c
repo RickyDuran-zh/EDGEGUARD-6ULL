@@ -29,8 +29,7 @@
 #define MAX_CONNECTIONS     10
 #define MAX_SSE_CLIENTS     8
 #define REQ_BUF_SIZE        4096
-#define RESP_BUF_SIZE       16384    /* 16 KB — enough for all JSON API responses */
-#define DASH_RESP_BUF_SIZE  262144   /* 256 KB heap — SPA HTML needs ~85 KB, safe margin */
+#define RESP_BUF_SIZE       32768
 #define RECV_TIMEOUT_SEC    2
 
 /* ---- global config ---- */
@@ -42,7 +41,7 @@ static char          g_cmd_tmp_path[272];  /* g_cmd_path + ".tmp" */
 static pthread_mutex_t g_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---- auth settings (can be overridden via CLI) ---- */
-#define AUTH_ENABLE 0  /* set to 1 to enable Basic Auth */
+#define AUTH_ENABLE 1
 static char g_auth_user[64] = "admin";
 static char g_auth_pass[64] = "edgeguard";
 
@@ -290,7 +289,7 @@ static const char *get_dashboard_html(void)
 "border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;"
 "transition:background .15s,color .15s;white-space:nowrap}\n"
 ".tab:hover{background:var(--bg3);color:var(--white)}\n"
-".tab.active{background:var(--accent);color:#fff}\n"
+".tab.active{background:var(--blue);color:#fff}\n"
 ".topbar-right{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--text2);white-space:nowrap}\n"
 ".conn-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}\n"
 ".conn-live{background:var(--green);box-shadow:0 0 5px var(--green)}\n"
@@ -301,7 +300,7 @@ static const char *get_dashboard_html(void)
 ".page.active{display:block}\n"
 
 /* ---- overview strip ---- */
-".overview-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px}\n"
+".overview-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}\n"
 ".ov-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
 "padding:16px 20px;text-align:center}\n"
 ".ov-card .ov-val{font-size:28px;font-weight:800;line-height:1.1}\n"
@@ -311,12 +310,11 @@ static const char *get_dashboard_html(void)
 ".ov-card.state-ALARM .ov-val{color:var(--red);animation:blink .5s infinite}\n"
 ".ov-card.state-FAULT .ov-val{color:var(--red)}\n"
 "@keyframes blink{50%{opacity:.3}}\n"
-".ov-card.state-TAMPER .ov-val{color:var(--red);animation:blink .5s infinite}\n"
 
 /* ---- cards ---- */
 ".card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;"
 "padding:16px 20px;margin-bottom:12px}\n"
-".card h2{font-size:12px;color:var(--accent);margin-bottom:12px;"
+".card h2{font-size:12px;color:var(--blue);margin-bottom:12px;"
 "text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px}\n"
 ".dot{width:7px;height:7px;border-radius:50%;display:inline-block}\n"
 ".dot-on{background:var(--green);box-shadow:0 0 4px var(--green)}\n"
@@ -371,26 +369,6 @@ static const char *get_dashboard_html(void)
 ".cam-placeholder{display:inline-block;padding:60px 80px;background:var(--bg3);"
 "border-radius:8px;color:var(--text2);font-size:14px}\n"
 ".cam-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}\n"
-/* new camera page components */
-".cam-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}\n"
-".cam-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:center}\n"
-".cam-card .cam-val{font-size:22px;font-weight:700;line-height:1.2}\n"
-".cam-card .cam-lbl{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}\n"
-".cam-card.cam-online .cam-val{color:var(--green)}\n"
-".cam-card.cam-offline .cam-val{color:var(--red)}\n"
-".cam-card.cam-tamper .cam-val{color:var(--red);animation:blink .5s infinite}\n"
-".cam-card.cam-warn .cam-val{color:var(--yellow)}\n"
-".verify-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:12px}\n"
-".verify-card.matched{border-color:var(--green)}\n"
-".verify-row{display:flex;gap:24px;flex-wrap:wrap;font-size:13px}\n"
-".verify-row .lbl{color:var(--text2)}\n"
-".verify-row .val{color:var(--white);font-weight:600}\n"
-".snap-img{width:100%;max-width:640px;border-radius:10px;border:2px solid var(--border);display:block;margin:0 auto 8px}\n"
-".vision-bar{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;padding-top:8px;border-top:1px solid var(--border);margin-top:8px}\n"
-".vision-bar .v-item{display:flex;align-items:center;gap:4px}\n"
-".vision-bar .v-dot{width:6px;height:6px;border-radius:50%;display:inline-block}\n"
-".vision-bar .v-dot.on{background:var(--green)}\n"
-".vision-bar .v-dot.off{background:var(--red)}\n"
 
 /* ---- refresh bar ---- */
 ".refresh-bar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text2);"
@@ -398,60 +376,12 @@ static const char *get_dashboard_html(void)
 ".refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}\n"
 
 /* ---- responsive ---- */
-"@media(max-width:900px){.overview-strip{grid-template-columns:repeat(3,1fr)}"
+"@media(max-width:900px){.overview-strip{grid-template-columns:repeat(2,1fr)}"
 ".sensor-grid{grid-template-columns:1fr}}\n"
-"@media(max-width:520px){.overview-strip{grid-template-columns:repeat(2,1fr)}"
+"@media(max-width:520px){.overview-strip{grid-template-columns:1fr}"
 ".topbar{padding:0 10px}.tab{padding:8px 10px;font-size:12px}"
 ".page{padding:12px 10px}.brand{font-size:15px}"
 ".topbar-right{gap:8px;font-size:11px}}\n"
-
-/* ---- service cards ---- */
-".svc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}\n"
-".svc-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 18px;"
-"display:flex;align-items:center;gap:12px}\n"
-".svc-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}\n"
-".svc-up{background:var(--green);box-shadow:0 0 6px var(--green)}\n"
-".svc-down{background:var(--red);box-shadow:0 0 6px var(--red)}\n"
-".svc-name{font-size:13px;font-weight:600;color:var(--white)}\n"
-".svc-extra{font-size:11px;color:var(--text2)}\n"
-
-/* ---- snapshot gallery ---- */
-".snap-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-top:12px}\n"
-".snap-thumb{background:var(--bg3);border:1px solid var(--border);border-radius:6px;"
-"overflow:hidden;cursor:pointer;transition:transform .15s}\n"
-".snap-thumb:hover{transform:scale(1.03);border-color:var(--accent)}\n"
-".snap-thumb img{width:100%;height:70px;object-fit:cover;display:block}\n"
-".snap-thumb .snap-label{font-size:10px;color:var(--text2);padding:3px 6px;text-align:center;"
-"white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n"
-
-/* ---- alarm stats bar ---- */
-".bar-chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding:0 6px}\n"
-".bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px}\n"
-".bar-col .bar-stack{width:100%;display:flex;flex-direction:column-reverse;border-radius:4px 4px 0 0;overflow:hidden}\n"
-".bar-col .bar-seg{width:100%;transition:height .3s}\n"
-".bar-col .bar-lbl{font-size:9px;color:var(--text2);margin-top:2px}\n"
-".bar-ALARM{background:var(--red)}\n"
-".bar-WARNING{background:var(--yellow)}\n"
-".bar-NORMAL{background:var(--green)}\n"
-".bar-FAULT{background:#b06060}\n"
-
-/* ---- filter row ---- */
-".filter-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}\n"
-".filter-row select,.filter-row input{background:var(--bg3);border:1px solid var(--border);"
-"color:var(--white);padding:6px 10px;border-radius:6px;font-size:12px}\n"
-
-/* ---- system stats ---- */
-".sys-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px}\n"
-".sys-stat{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px 20px;text-align:center}\n"
-".sys-stat .sys-val{font-size:26px;font-weight:800;color:var(--white)}\n"
-".sys-stat .sys-lbl{font-size:11px;color:var(--text2);margin-top:4px}\n"
-".sys-bar-bg{background:var(--bg3);border-radius:4px;height:8px;margin-top:6px;overflow:hidden}\n"
-".sys-bar-fg{height:100%;border-radius:4px;transition:width .5s}\n"
-
-/* sensor detail */
-".sensor-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px}\n"
-".sensor-val-big{font-size:32px;font-weight:800;color:var(--white)}\n"
-".sensor-val-big small{font-size:14px;color:var(--text2);font-weight:400}\n"
 "</style>\n"
 "</head>\n"
 "<body>\n"
@@ -462,11 +392,9 @@ static const char *get_dashboard_html(void)
 "<div class=\"brand\">RickyDuran<em>-EdgeGuard</em></div>\n"
 "<div class=\"tabs\">\n"
 "<button class=\"tab active\" data-page=\"dashboard\">仪表盘</button>\n"
-"<button class=\"tab\" data-page=\"sensors\">传感器</button>\n"
 "<button class=\"tab\" data-page=\"alarms\">报警记录</button>\n"
 "<button class=\"tab\" data-page=\"camera\">摄像头</button>\n"
 "<button class=\"tab\" data-page=\"settings\">系统设置</button>\n"
-"<button class=\"tab\" data-page=\"system\">系统</button>\n"
 "</div>\n"
 "<div class=\"topbar-right\">\n"
 "<span id=\"conn_status\"><span class=\"conn-dot conn-live\"></span>在线</span>\n"
@@ -481,10 +409,8 @@ static const char *get_dashboard_html(void)
 "<div class=\"overview-strip\">\n"
 "<div class=\"ov-card\" id=\"ov_state\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">系统状态</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_alarms\"><div class=\"ov-val\">0</div><div class=\"ov-lbl\">累计报警</div></div>\n"
-"<div class=\"ov-card\" id=\"ov_tamper\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">摄像头遮挡</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_uptime\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">运行时长</div></div>\n"
 "<div class=\"ov-card\" id=\"ov_ip\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">板卡 IP</div></div>\n"
-"<div class=\"ov-card\" id=\"ov_temp\"><div class=\"ov-val\">--</div><div class=\"ov-lbl\">芯片温度</div></div>\n"
 "</div>\n"
 
 /* sensor cards */
@@ -522,12 +448,6 @@ static const char *get_dashboard_html(void)
 "<button class=\"btn btn-ack\"  id=\"btn_ack\"  onclick=\"sendCmd('ack_alarm',this)\">✅ 确认报警</button>\n"
 "<button class=\"btn btn-demo\" id=\"btn_demo\" onclick=\"sendCmd('demo_alarm',this)\">🧪 测试报警</button>\n"
 "</div>\n"
-"<div class=\"vision-bar\">\n"
-"<div class=\"v-item\"><span class=\"v-dot on\" id=\"v_mode_dot\"></span>模式 <b id=\"v_mode\">--</b></div>\n"
-"<div class=\"v-item\"><span class=\"v-dot off\" id=\"v_motion_dot\"></span>运动 <b id=\"v_motion\">--</b></div>\n"
-"<div class=\"v-item\">人脸 <b id=\"v_faces\">0</b></div>\n"
-"<div class=\"v-item\">推理 <b id=\"v_infer\">--</b></div>\n"
-"</div>\n"
 "</div>\n"
 
 /* recent alarms */
@@ -543,53 +463,10 @@ static const char *get_dashboard_html(void)
 
 "</div>\n" /* end dashboard */
 
-/* ======== Page: Sensors ======== */
-"<div id=\"page-sensors\" class=\"page\">\n"
-"<div class=\"card\">\n"
-"<h2>实时传感器数据</h2>\n"
-"<div class=\"sensor-hero\">\n"
-"<div class=\"card\"><h2>加速度 X/Y/Z</h2>"
-"<div class=\"sensor-val-big\" id=\"s_big_accel\">--</div></div>\n"
-"<div class=\"card\"><h2>陀螺仪 X/Y/Z</h2>"
-"<div class=\"sensor-val-big\" id=\"s_big_gyro\">--</div></div>\n"
-"<div class=\"card\"><h2>震动增量</h2>"
-"<div class=\"sensor-val-big\" id=\"s_big_motion\">--</div></div>\n"
-"<div class=\"card\"><h2>温度</h2>"
-"<div class=\"sensor-val-big\" id=\"s_big_temp\">--<small>°C</small></div></div>\n"
-"</div>\n"
-"<div class=\"card\">\n"
-"<h2>AP3216C 环境光传感器</h2>\n"
-"<div class=\"sensor-hero\">\n"
-"<div class=\"card\"><h2>红外 (IR)</h2><div class=\"sensor-val-big\" id=\"s_big_ir\">--</div></div>\n"
-"<div class=\"card\"><h2>环境光 (ALS)</h2><div class=\"sensor-val-big\" id=\"s_big_als\">--<small>lx</small></div></div>\n"
-"<div class=\"card\"><h2>接近 (PS)</h2><div class=\"sensor-val-big\" id=\"s_big_ps\">--</div></div>\n"
-"</div>\n"
-"</div>\n"
-"</div>\n"
-
 /* ======== Page: Alarms ======== */
 "<div id=\"page-alarms\" class=\"page\">\n"
 "<div class=\"card\">\n"
-"<h2>报警统计 (近7天)</h2>\n"
-"<div class=\"bar-chart\" id=\"alarm_stats_chart\" style=\"margin-bottom:12px\">\n"
-"<span style=\"color:var(--text2);font-size:12px\">加载中...</span>\n"
-"</div>\n"
-"</div>\n"
-"<div class=\"card\">\n"
 "<h2>报警历史 <span id=\"alarm_page_info\" style=\"font-weight:400;font-size:12px;color:var(--text2);margin-left:8px\"></span></h2>\n"
-"<div class=\"filter-row\">\n"
-"<select id=\"alarm_filter_state\" onchange=\"loadAlarms(200)\">"
-"<option value=\"\">全部级别</option>"
-"<option value=\"ALARM\">ALARM</option>"
-"<option value=\"WARNING\">WARNING</option>"
-"<option value=\"NORMAL\">NORMAL</option>"
-"<option value=\"FAULT\">FAULT</option>"
-"</select>\n"
-"<input type=\"date\" id=\"alarm_filter_from\" style=\"width:130px\" onchange=\"loadAlarms(200)\">\n"
-"<span style=\"color:var(--text2);font-size:12px\">至</span>\n"
-"<input type=\"date\" id=\"alarm_filter_to\" style=\"width:130px\" onchange=\"loadAlarms(200)\">\n"
-"<button class=\"btn btn-ack\" style=\"font-size:11px;padding:6px 12px\" onclick=\"loadAlarms(200)\">🔍 筛选</button>\n"
-"</div>\n"
 "<table class=\"alarm-table\">\n"
 "<thead><tr><th>时间</th><th>级别</th><th>原因</th><th>震动</th><th>接近</th><th>环境光</th><th>温度</th></tr></thead>\n"
 "<tbody id=\"alarms_tbody\">\n"
@@ -609,44 +486,20 @@ static const char *get_dashboard_html(void)
 
 /* ======== Page: Camera ======== */
 "<div id=\"page-camera\" class=\"page\">\n"
-/* snapshot preview */
 "<div class=\"card\">\n"
-"<h2>实时快照 <span style=\"font-weight:400;color:var(--text2);margin-left:8px;font-size:11px\" id=\"cam_update_hint\"></span></h2>\n"
-"<img class=\"snap-img\" id=\"cam_snap_img\" src=\"\" alt=\"摄像头快照\" onerror=\"this.style.display='none'\" style=\"display:block\">\n"
-"<div style=\"text-align:center;margin-top:8px\">\n"
-"<button class=\"btn btn-ack\" style=\"font-size:11px;padding:6px 14px;cursor:pointer\" onclick=\"refreshCamera()\">🔄 手动刷新</button>\n"
+"<h2>实时快照</h2>\n"
+"<div class=\"cam-preview\" id=\"cam_preview\">\n"
+"<span class=\"cam-placeholder\">摄像头离线或未连接</span>\n"
+"</div>\n"
+"<div style=\"text-align:center;margin-bottom:12px\">\n"
+"<span style=\"font-size:12px;color:var(--text2)\" id=\"cam_update_hint\"></span>\n"
 "</div>\n"
 "</div>\n"
-/* info grid — 5 cards */
-"<div class=\"cam-grid\">\n"
-"<div class=\"cam-card\" id=\"cam_status_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">摄像头</div></div>\n"
-"<div class=\"cam-card\" id=\"cam_mode_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">当前模式</div></div>\n"
-"<div class=\"cam-card\" id=\"cam_tamper_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">遮挡检测</div></div>\n"
-"<div class=\"cam-card\" id=\"cam_motion_card\"><div class=\"cam-val\">--</div><div class=\"cam-lbl\">运动检测</div></div>\n"
-"<div class=\"cam-card\" id=\"cam_faces_card\"><div class=\"cam-val\">0</div><div class=\"cam-lbl\">人脸数量</div></div>\n"
-"</div>\n"
-/* verify result */
-"<div class=\"verify-card\" id=\"cam_verify_card\" style=\"display:none\">\n"
-"<h2 style=\"margin-bottom:6px\">人脸验证结果</h2>\n"
-"<div class=\"verify-row\">"
-"<span class=\"lbl\">匹配</span><span class=\"val\" id=\"cv_matched\">--</span>"
-"<span class=\"lbl\">用户</span><span class=\"val\" id=\"cv_user\">--</span>"
-"<span class=\"lbl\">置信度</span><span class=\"val\" id=\"cv_conf\">--</span>"
-"</div>\n"
-"</div>\n"
-/* inference + snapshot path */
-"<div class=\"card\">\n"
-"<div class=\"sensor-row\">"
-"<span class=\"lbl\">推理耗时</span><span class=\"val\" id=\"cam_infer\">--</span>"
-"<span class=\"lbl\">快照路径</span><span class=\"val\" id=\"cam_snap_path\" style=\"font-size:10px;word-break:break-all\">--</span>"
-"</div>\n"
-"</div>\n"
-/* snapshot gallery */
-"<div class=\"card\">\n"
-"<h2>历史快照 <span style=\"font-weight:400;color:var(--text2);margin-left:8px;font-size:11px\">(最新20张)</span></h2>\n"
-"<div class=\"snap-gallery\" id=\"snap_gallery\">\n"
-"<span style=\"color:var(--text2);font-size:12px\">加载中...</span>\n"
-"</div>\n"
+"<div class=\"cam-info\">\n"
+"<div class=\"card\"><h2>摄像头</h2><div class=\"ov-val\" id=\"cam_status_val\" style=\"font-size:22px\">离线</div></div>\n"
+"<div class=\"card\"><h2>运动检测</h2><div class=\"ov-val\" id=\"cam_motion_val\" style=\"font-size:22px\">--</div></div>\n"
+"<div class=\"card\"><h2>人脸计数</h2><div class=\"ov-val\" id=\"cam_faces_val\" style=\"font-size:22px\">0</div></div>\n"
+"<div class=\"card\"><h2>推理耗时</h2><div class=\"ov-val\" id=\"cam_infer_val\" style=\"font-size:22px\">--</div></div>\n"
 "</div>\n"
 "</div>\n"
 
@@ -663,28 +516,6 @@ static const char *get_dashboard_html(void)
 "<div class=\"sensor-row\">"
 "<span class=\"lbl\">核心进程</span><span class=\"val\" id=\"cfg_hubd\">--</span>"
 "<span class=\"lbl\">板卡时间</span><span class=\"val\" id=\"cfg_time\">--</span>"
-"</div>\n"
-"</div>\n"
-"</div>\n"
-
-/* ======== Page: System ======== */
-"<div id=\"page-system\" class=\"page\">\n"
-"<div class=\"card\">\n"
-"<h2>核心服务状态</h2>\n"
-"<div class=\"svc-grid\" id=\"svc_grid\">\n"
-"<div class=\"svc-card\"><span class=\"svc-dot svc-down\"></span><div><div class=\"svc-name\">sensor_hubd</div><div class=\"svc-extra\">传感器核心</div></div></div>\n"
-"<div class=\"svc-card\"><span class=\"svc-dot svc-down\"></span><div><div class=\"svc-name\">edgeguard_httpd</div><div class=\"svc-extra\">Web 服务</div></div></div>\n"
-"<div class=\"svc-card\"><span class=\"svc-dot svc-down\"></span><div><div class=\"svc-name\">edgeguard_visiond</div><div class=\"svc-extra\">摄像头</div></div></div>\n"
-"<div class=\"svc-card\"><span class=\"svc-dot svc-down\"></span><div><div class=\"svc-name\">edgeguard_mqttd</div><div class=\"svc-extra\">MQTT 上报</div></div></div>\n"
-"</div>\n"
-"</div>\n"
-"<div class=\"card\">\n"
-"<h2>系统资源</h2>\n"
-"<div class=\"sys-stats\">\n"
-"<div class=\"sys-stat\"><div class=\"sys-val\" id=\"sys_cpu\">--%</div><div class=\"sys-lbl\">CPU 使用率</div><div class=\"sys-bar-bg\"><div class=\"sys-bar-fg\" id=\"sys_cpu_bar\" style=\"width:0%;background:var(--accent)\"></div></div></div>\n"
-"<div class=\"sys-stat\"><div class=\"sys-val\" id=\"sys_mem\">--%</div><div class=\"sys-lbl\">内存使用率</div><div class=\"sys-bar-bg\"><div class=\"sys-bar-fg\" id=\"sys_mem_bar\" style=\"width:0%;background:var(--yellow)\"></div></div></div>\n"
-"<div class=\"sys-stat\"><div class=\"sys-val\" id=\"sys_uptime\">--</div><div class=\"sys-lbl\">系统运行时长</div></div>\n"
-"<div class=\"sys-stat\"><div class=\"sys-val\" id=\"sys_ip\">--</div><div class=\"sys-lbl\">板卡 IP 地址</div></div>\n"
 "</div>\n"
 "</div>\n"
 "</div>\n"
@@ -710,33 +541,15 @@ static const char *get_dashboard_html(void)
 "('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)}\n"
 "setInterval(tick,1000);tick();\n"
 
-/* ---- SSE real-time push (replaces 1s polling) ---- */
-"function initSSE(){\n"
-"var es=new EventSource('/api/stream');\n"
-"es.onmessage=function(e){\n"
-"try{var d=JSON.parse(e.data);\n"
-"if(currentPage==='dashboard'||currentPage==='sensors')updateUI(d);\n"
-"if(currentPage==='settings')updateSettingsInfo(d);\n"
-"document.getElementById('conn_status').innerHTML="
-"'<span class=\"conn-dot conn-live\"></span>在线';connLost=0;\n"
-"}catch(err){}\n"
-"};\n"
-"es.onerror=function(){if(es.readyState===EventSource.CLOSED){connLost++;"
-"if(connLost>=3)document.getElementById('conn_status').innerHTML="
-"'<span class=\"conn-dot conn-lost\"></span>离线'}}\n"
-"window._sse=es;\n"
-"}\n"
-
 /* ---- tab navigation ---- */
 "function switchPage(name){\n"
 "currentPage=name;\n"
 "document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});\n"
-"var pg=document.getElementById('page-'+name);if(pg)pg.classList.add('active');\n"
+"document.getElementById('page-'+name).classList.add('active');\n"
 "document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});\n"
-"var tb=document.querySelector('[data-page='+name+']');if(tb)tb.classList.add('active');\n"
-"if(name==='alarms'){loadAlarms(200);loadAlarmStats()}\n"
-"if(name==='camera'){refreshCamera();loadSnapshotGallery()}\n"
-"if(name==='system')refreshSystem()\n"
+"document.querySelector('[data-page='+name+']').classList.add('active');\n"
+"if(name==='alarms')loadAlarms(200);\n"
+"if(name==='camera')refreshCamera();\n"
 "if(name==='settings'){fetch('/api/status').then(function(r){return r.json()}).then(function(d){loadSettings(d)});}\n"
 "}\n"
 "document.querySelectorAll('.tab').forEach(function(t){\n"
@@ -763,8 +576,6 @@ static const char *get_dashboard_html(void)
 "var up=(d.system||{}).uptime_sec||0;\n"
 "document.getElementById('ov_uptime').querySelector('.ov-val').textContent=fmtUptime(up);\n"
 "document.getElementById('ov_ip').querySelector('.ov-val').textContent=(d.system||{}).ip||'--';\n"
-"var mt=d.mpu6050||{};var tmpVal=mt.temp||0;\n"
-"document.getElementById('ov_temp').querySelector('.ov-val').textContent=tmpVal.toFixed(1)+'\\u00b0C';\n"
 /* MPU6050 */
 "var m=d.mpu6050||{};\n"
 "document.getElementById('mpu_accel').textContent=(m.ax||0)+' '+(m.ay||0)+' '+(m.az||0);\n"
@@ -778,14 +589,6 @@ static const char *get_dashboard_html(void)
 "document.getElementById('ap_als').textContent=a.als||0;\n"
 "document.getElementById('ap_ps').textContent=a.ps||0;\n"
 "setDot('ap_dot',a.online);\n"
-/* sensor detail page */
-"var sx=document.getElementById('s_big_accel');if(sx)sx.textContent=(m.ax||0)+' '+(m.ay||0)+' '+(m.az||0);\n"
-"var sg=document.getElementById('s_big_gyro');if(sg)sg.textContent=(m.gx||0)+' '+(m.gy||0)+' '+(m.gz||0);\n"
-"var sm=document.getElementById('s_big_motion');if(sm)sm.textContent=m.motion_delta||0;\n"
-"var stb=document.getElementById('s_big_temp');if(stb)stb.innerHTML=(tmpVal.toFixed(1))+'<small>°C</small>';\n"
-"var si=document.getElementById('s_big_ir');if(si)si.textContent=a.ir||0;\n"
-"var sa=document.getElementById('s_big_als');if(sa)sa.innerHTML=(a.als||0)+'<small>lx</small>';\n"
-"var sp=document.getElementById('s_big_ps');if(sp)sp.textContent=a.ps||0;\n"
 /* device */
 "var dev=d.device||{};\n"
 "document.getElementById('dev_led').textContent=dev.led||'--';\n"
@@ -802,19 +605,6 @@ static const char *get_dashboard_html(void)
 "else{ba.textContent='✅ 确认报警';ba.classList.remove('active');ba.disabled=!1}\n"
 /* vision */
 "var vis=d.vision||{};camOnline=vis.camera_online||!1;\n"
-/* tamper overview card */
-"var tc=document.getElementById('ov_tamper');if(tc){var t=vis.tamper_detected;"
-"tc.className='ov-card'+(t?' state-TAMPER':'');"
-"tc.querySelector('.ov-val').textContent=t?'⚠被遮挡':'安全'}\n"
-/* vision bar in device card */
-"var vm=document.getElementById('v_mode');if(vm){var md=vis.mode||'monitor';"
-"var mdCN={monitor:'监控',tamper:'防护',facelogin:'登录'};vm.textContent=mdCN[md]||md;"
-"var vmd=document.getElementById('v_mode_dot');vmd.className='v-dot '+(md==='facelogin'?'on':'off')}\n"
-"var vmo=document.getElementById('v_motion');if(vmo){"
-"vmo.textContent=vis.motion_detected?'检测到':'无';"
-"var vmod=document.getElementById('v_motion_dot');vmod.className='v-dot '+(vis.motion_detected?'on':'off')}\n"
-"var vf=document.getElementById('v_faces');if(vf)vf.textContent=vis.face_count||0;\n"
-"var vi=document.getElementById('v_infer');if(vi){var ims=vis.inference_ms||0;vi.textContent=ims>0?ims+' ms':'--'}\n"
 /* connection */
 "document.getElementById('conn_status').innerHTML="
 "'<span class=\"conn-dot conn-live\"></span>在线';connLost=0;\n"
@@ -829,11 +619,7 @@ static const char *get_dashboard_html(void)
 /* ---- load alarm history ---- */
 "var alarmPageNum=0,alarmPerPage=15;\n"
 "function loadAlarms(limit){\n"
-"var qs='limit='+limit;\n"
-"var fs=document.getElementById('alarm_filter_state');if(fs&&fs.value)qs+='&state='+encodeURIComponent(fs.value);\n"
-"var ff=document.getElementById('alarm_filter_from');if(ff&&ff.value)qs+='&from='+ff.value;\n"
-"var ft=document.getElementById('alarm_filter_to');if(ft&&ft.value)qs+='&to='+ft.value;\n"
-"fetch('/api/alarms?'+qs).then(function(r){return r.json()}).then(function(rows){\n"
+"fetch('/api/alarms?limit='+limit).then(function(r){return r.json()}).then(function(rows){\n"
 "alarmData=rows||[];alarmPageNum=0;\n"
 "if(document.getElementById('alarms_tbody'))renderPagedAlarms();\n"
 "if(document.getElementById('recent_alarms_tbody'))\n"
@@ -884,44 +670,23 @@ static const char *get_dashboard_html(void)
 "}\n"
 
 /* ---- camera refresh ---- */
-"function updateCameraInfo(v){\n"
-/* camera status */
-"var cs=document.getElementById('cam_status_card');\n"
-"var on=v.camera_online||!1;\n"
-"if(cs){cs.className='cam-card '+(on?'cam-online':'cam-offline');cs.querySelector('.cam-val').textContent=on?'在线':'离线'}\n"
-/* mode */
-"var cmo=document.getElementById('cam_mode_card');\n"
-"if(cmo){var md=v.mode||'monitor';var mdCN={monitor:'监控模式',tamper:'防护模式',facelogin:'登录模式'};cmo.querySelector('.cam-val').textContent=mdCN[md]||md}\n"
-/* tamper */
-"var ct=document.getElementById('cam_tamper_card');\n"
-"if(ct){var t=v.tamper_detected;ct.className='cam-card '+(t?'cam-tamper':'');ct.querySelector('.cam-val').textContent=t?'⚠被遮挡':'安全'}\n"
-/* motion */
-"var cm=document.getElementById('cam_motion_card');\n"
-"if(cm){cm.className='cam-card '+(v.motion_detected?'cam-warn':'');cm.querySelector('.cam-val').textContent=v.motion_detected?'检测到':'无'}\n"
-/* face count */
-"var cf=document.getElementById('cam_faces_card');\n"
-"if(cf)cf.querySelector('.cam-val').textContent=v.face_count||0;\n"
-/* verify result */
-"var vr=v.face_verify_result;var vc=document.getElementById('cam_verify_card');\n"
-"if(vc&&vr&&vr.matched){vc.style.display='';vc.className='verify-card matched';\n"
-"var vm=document.getElementById('cv_matched');if(vm)vm.textContent='是';\n"
-"var vu=document.getElementById('cv_user');if(vu)vu.textContent=vr.user_id||'--';\n"
-"var vf=document.getElementById('cv_conf');if(vf)vf.textContent=(vr.confidence||0).toFixed(2)}\n"
-"else if(vc){vc.style.display='none'}\n"
-/* inference + path */
-"var ci=document.getElementById('cam_infer');\n"
-"if(ci){var ims=v.inference_ms||0;ci.textContent=ims>0?ims+' ms':'--'}\n"
-"var csp=document.getElementById('cam_snap_path');\n"
-"if(csp){var sp=v.snapshot_path;csp.textContent=(sp&&sp!=='null')?sp:'--'}\n"
-/* snapshot image */
-"var si=document.getElementById('cam_snap_img');\n"
-"if(si&&on){si.style.display='';si.src='/api/snapshot?t='+Date.now()}\n"
-"else if(si){si.style.display='none'}\n"
-"var ch=document.getElementById('cam_update_hint');\n"
-"if(ch)ch.textContent='更新于 '+new Date().toLocaleTimeString()\n"
-"}\n"
 "function refreshCamera(){\n"
-"fetch('/api/vision').then(function(r){return r.json()}).then(function(v){updateCameraInfo(v)}).catch(function(){});\n"
+"var cs=document.getElementById('cam_status_val');\n"
+"var cm=document.getElementById('cam_motion_val');\n"
+"var cf=document.getElementById('cam_faces_val');\n"
+"var ci=document.getElementById('cam_infer_val');\n"
+"var cp=document.getElementById('cam_preview');\n"
+"var ch=document.getElementById('cam_update_hint');\n"
+"fetch('/api/vision').then(function(r){return r.json()}).then(function(v){\n"
+"var on=v.camera_online||!1;camOnline=on;\n"
+"if(cs){cs.textContent=on?'在线':'离线';cs.style.color=on?'#3fb950':'#f85149'}\n"
+"if(cm)cm.textContent=v.motion_detected?'检测到':'无';\n"
+"if(cf)cf.textContent=v.face_count||0;\n"
+"if(ci)ci.textContent=v.inference_ms?v.inference_ms+' ms':'--';\n"
+"if(cp&&on){cp.innerHTML='<img src=\"/api/snapshot?t='+Date.now()+'\" alt=\"snapshot\" onerror=\"this.parentElement.innerHTML=\\'<span class=cam-placeholder>快照加载失败</span>\\'\">';\n"
+"if(ch)ch.textContent='更新于 '+new Date().toLocaleTimeString();}\n"
+"if(cp&&!on){cp.innerHTML='<span class=\"cam-placeholder\">摄像头离线或未连接</span>';if(ch)ch.textContent=''}\n"
+"}).catch(function(){});\n"
 "}\n"
 
 /* ---- settings ---- */
@@ -1004,73 +769,9 @@ static const char *get_dashboard_html(void)
 "}catch(e){}\n"
 "}\n"
 "\n"
-
-/* ---- snapshot gallery ---- */
-"function loadSnapshotGallery(){\n"
-"var g=document.getElementById('snap_gallery');if(!g)return;\n"
-"fetch('/api/snapshots/list').then(function(r){return r.json()}).then(function(list){\n"
-"if(!list||!list.length){g.innerHTML='<span style=\"color:var(--text2);font-size:12px\">暂无快照</span>';return}\n"
-"var h='';\n"
-"list.forEach(function(f){\n"
-"h+='<div class=\"snap-thumb\" onclick=\"window.open(\\'/api/snapshot\\')\">"
-"+'<img src=\"/api/snapshot\" loading=\"lazy\"><div class=\"snap-label\">'+f.name+'</div></div>';\n"
-"});\n"
-"g.innerHTML=h;\n"
-"}).catch(function(){g.innerHTML='<span style=\"color:var(--text2);font-size:12px\">加载失败</span>'});\n"
-"}\n"
-
-/* ---- alarm stats chart ---- */
-"function loadAlarmStats(){\n"
-"var c=document.getElementById('alarm_stats_chart');if(!c)return;\n"
-"fetch('/api/alarms/stats').then(function(r){return r.json()}).then(function(rows){\n"
-"if(!rows||!rows.length){c.innerHTML='<span style=\"color:var(--text2);font-size:12px\">暂无统计数据</span>';return}\n"
-"var days={},labels=[];\n"
-"rows.forEach(function(r){if(!days[r.day]){days[r.day]={};labels.push(r.day)}days[r.day][r.state]=r.count});\n"
-"labels.sort();if(labels.length>7)labels=labels.slice(-7);\n"
-"var max=0;\n"
-"labels.forEach(function(d){var t=0;['ALARM','WARNING','NORMAL','FAULT'].forEach(function(s){t+=days[d][s]||0});if(t>max)max=t});\n"
-"if(!max)max=1;\n"
-"var h='';\n"
-"labels.forEach(function(d){\n"
-"h+='<div class=\"bar-col\">';\n"
-"var total=0;['ALARM','WARNING','NORMAL','FAULT'].forEach(function(s){total+=days[d][s]||0});\n"
-"h+='<div class=\"bar-stack\" style=\"height:'+(total/max*100)+'%\">';\n"
-"['NORMAL','WARNING','ALARM','FAULT'].forEach(function(s){var v=days[d][s]||0;if(v>0)h+='<div class=\"bar-seg bar-'+s+'\" style=\"height:'+(v/total*100)+'%\"></div>'});\n"
-"h+='</div>';\n"
-"h+='<div class=\"bar-lbl\">'+d.slice(5)+'</div></div>';\n"
-"});\n"
-"c.innerHTML=h;\n"
-"}).catch(function(){c.innerHTML='<span style=\"color:var(--text2);font-size:12px\">加载失败</span>'});\n"
-"}\n"
-
-/* ---- system page refresh ---- */
-"function refreshSystem(){\n"
-"fetch('/api/services').then(function(r){return r.json()}).then(function(s){\n"
-"var svc=document.getElementById('svc_grid');if(!svc)return;\n"
-"var order=['sensor_hubd','edgeguard_httpd','edgeguard_visiond','edgeguard_mqttd'];\n"
-"var names={sensor_hubd:'传感器核心',edgeguard_httpd:'Web 服务',edgeguard_visiond:'摄像头',edgeguard_mqttd:'MQTT 上报'};\n"
-"var h='';\n"
-"order.forEach(function(k){\n"
-"var v=s[k];var ok=v&&v.running;\n"
-"h+='<div class=\"svc-card\"><span class=\"svc-dot '+(ok?'svc-up':'svc-down')+'\"></span>'"
-"+'<div><div class=\"svc-name\">'+k+'</div><div class=\"svc-extra\">'+(names[k]||'')+'</div></div></div>';\n"
-"});\n"
-"svc.innerHTML=h;\n"
-"var ipEl=document.getElementById('sys_ip');if(ipEl)ipEl.textContent=s.board_ip||'--';\n"
-"}).catch(function(){});\n"
-"fetch('/api/system/stats').then(function(r){return r.json()}).then(function(s){\n"
-"var ce=document.getElementById('sys_cpu');if(ce){ce.textContent=s.cpu_percent.toFixed(1)+'%';"
-"document.getElementById('sys_cpu_bar').style.width=s.cpu_percent+'%';}\n"
-"var me=document.getElementById('sys_mem');if(me){me.textContent=s.mem_used_pct.toFixed(1)+'%';"
-"document.getElementById('sys_mem_bar').style.width=s.mem_used_pct+'%';}\n"
-"var ue=document.getElementById('sys_uptime');if(ue)ue.textContent=fmtUptime(s.uptime_sec||0);\n"
-"}).catch(function(){});\n"
-"}\n"
-
 /* ---- startup ---- */
 "setInterval(refresh,1000);refresh();\n"
-"setInterval(function(){if(currentPage==='camera'){refreshCamera();loadSnapshotGallery()}},5000);\n"
-"setInterval(function(){if(currentPage==='system')refreshSystem()},5000);\n"
+"setInterval(function(){if(currentPage==='camera')refreshCamera()},3000);\n"
 "</script>\n"
 "</body>\n"
 "</html>\n";
@@ -1081,7 +782,7 @@ static void build_dashboard_response(char *resp, size_t size)
 {
     const char *html = get_dashboard_html();
     size_t body_len = strlen(html);
-    int needed = snprintf(resp, size,
+    snprintf(resp, size,
              "HTTP/1.1 200 OK\r\n"
              "Content-Type: text/html; charset=utf-8\r\n"
              "Content-Length: %zu\r\n"
@@ -1089,14 +790,6 @@ static void build_dashboard_response(char *resp, size_t size)
              "\r\n"
              "%s",
              body_len, html);
-    fprintf(stderr, "[edgeguard_httpd] dashboard HTML body=%zu bytes, "
-            "snprintf needed=%d, buf_size=%zu, TRUNCATED=%s\n",
-            body_len, needed, size,
-            (size_t)needed >= size ? "YES" : "no");
-    if ((size_t)needed >= size) {
-        fprintf(stderr, "[edgeguard_httpd] FATAL: response truncated! "
-                "needed %d > buf %zu\n", needed, size);
-    }
 }
 
 /* ---- build 404 response ---- */
@@ -1261,10 +954,7 @@ static void json_escape_str(const char *src, char *dst, size_t dst_size)
     dst[j] = '\0';
 }
 
-static int build_alarms_json(char *out, size_t size, int limit,
-                              const char *filter_state,
-                              const char *filter_from,
-                              const char *filter_to)
+static int build_alarms_json(char *out, size_t size, int limit)
 {
     sqlite3 *db = NULL;
     int rc = sqlite3_open_v2(ALARM_DB_PATH, &db,
@@ -1275,39 +965,10 @@ static int build_alarms_json(char *out, size_t size, int limit,
         return -1;
     }
 
-    /* Build WHERE clauses dynamically.
-       Validate state against known values to prevent SQL injection. */
-    char where[256] = "";
-    int have_where = 0;
-    if (filter_state && filter_state[0]) {
-        if (!strcmp(filter_state, "ALARM") || !strcmp(filter_state, "WARNING")
-            || !strcmp(filter_state, "NORMAL") || !strcmp(filter_state, "FAULT")) {
-            snprintf(where, sizeof(where), " WHERE state='%s'", filter_state);
-            have_where = 1;
-        }
-    }
-    if (filter_from && filter_from[0]) {
-        if (have_where)
-            strncat(where, " AND ", sizeof(where) - strlen(where) - 1);
-        else { strncat(where, " WHERE ", sizeof(where) - strlen(where) - 1); have_where = 1; }
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp), "timestamp >= '%s'", filter_from);
-        strncat(where, tmp, sizeof(where) - strlen(where) - 1);
-    }
-    if (filter_to && filter_to[0]) {
-        if (have_where)
-            strncat(where, " AND ", sizeof(where) - strlen(where) - 1);
-        else { strncat(where, " WHERE ", sizeof(where) - strlen(where) - 1); have_where = 1; }
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp), "timestamp <= '%s 23:59:59'", filter_to);
-        strncat(where, tmp, sizeof(where) - strlen(where) - 1);
-    }
-
-    char sql[512];
-    snprintf(sql, sizeof(sql),
+    const char *sql =
         "SELECT id, timestamp, state, reason, motion_delta, ps, als, "
         "mpu_temp, acknowledged "
-        "FROM alarm_events%s ORDER BY id DESC LIMIT ?;", where);
+        "FROM alarm_events ORDER BY id DESC LIMIT ?;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
         sqlite3_close(db);
@@ -1360,212 +1021,6 @@ static int build_alarms_json(char *out, size_t size, int limit,
     return 0;
 }
 
-/* ---- service status ---- */
-#define VISION_JSON_PATH    "/tmp/edgeguard_vision.json"
-
-static void build_services_json(char *out, size_t size)
-{
-    /* check sensor_hubd: grep status JSON for "sensor_hubd" field */
-    char status[8192];
-    int hubd_ok = 0;
-    if (read_file(g_status_path, status, sizeof(status)) >= 0) {
-        if (strstr(status, "\"sensor_hubd\":\"running\""))
-            hubd_ok = 1;
-    }
-
-    /* check visiond: see if vision JSON exists and camera is online */
-    int visd_ok = 0;
-    char vbuf[2048];
-    if (read_file(VISION_JSON_PATH, vbuf, sizeof(vbuf)) >= 0) {
-        if (strstr(vbuf, "\"camera_online\": true") || strstr(vbuf, "\"camera_online\":true"))
-            visd_ok = 1;
-        else if (strstr(vbuf, "\"camera_online\""))
-            visd_ok = 0;  /* explicitly offline */
-        /* if file exists and contains vision data at all, daemon is running */
-        if (strstr(vbuf, "camera_online"))
-            visd_ok = visd_ok;  /* use value from above */
-        else
-            visd_ok = 0;
-    }
-
-    /* check mqttd via pidof */
-    int mqttd_ok = 0;
-    {
-        FILE *fp = popen("pidof edgeguard_mqttd 2>/dev/null", "r");
-        if (fp) {
-            char pidbuf[32] = {0};
-            if (fgets(pidbuf, sizeof(pidbuf), fp) && pidbuf[0])
-                mqttd_ok = 1;
-            pclose(fp);
-        }
-    }
-
-    /* check if httpd is responding (always true if this code runs) */
-    char ip[64];
-    get_eth0_ip(ip, sizeof(ip));
-
-    snprintf(out, size,
-        "{\n"
-        "  \"edgeguard_httpd\":  {\"running\":true,\"port\":%d},\n"
-        "  \"sensor_hubd\":      {\"running\":%s},\n"
-        "  \"edgeguard_visiond\":{\"running\":%s},\n"
-        "  \"edgeguard_mqttd\":  {\"running\":%s},\n"
-        "  \"board_ip\":\"%s\"\n"
-        "}\n",
-        g_port,
-        hubd_ok   ? "true" : "false",
-        visd_ok   ? "true" : "false",
-        mqttd_ok  ? "true" : "false",
-        ip);
-}
-
-/* ---- system resource stats (via /proc) ---- */
-static void build_system_stats_json(char *out, size_t size)
-{
-    double cpu = 0.0;
-    unsigned long mem_total = 0, mem_avail = 0;
-    double uptime = 0.0;
-
-    /* CPU: parse first line of /proc/stat */
-    {
-        FILE *fp = fopen("/proc/stat", "r");
-        if (fp) {
-            unsigned long user, nice, sys, idle, iowait, irq, softirq, steal;
-            if (fscanf(fp, "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
-                       &user, &nice, &sys, &idle, &iowait, &irq, &softirq, &steal) >= 4) {
-                unsigned long total = user + nice + sys + idle + iowait + irq + softirq + steal;
-                unsigned long used = total - idle - iowait;
-                if (total > 0) cpu = (double)used * 100.0 / (double)total;
-            }
-            fclose(fp);
-        }
-    }
-
-    /* Memory: parse /proc/meminfo */
-    {
-        FILE *fp = fopen("/proc/meminfo", "r");
-        if (fp) {
-            char line[128];
-            while (fgets(line, sizeof(line), fp)) {
-                if (strncmp(line, "MemTotal:", 9) == 0)
-                    sscanf(line + 9, "%lu", &mem_total);
-                else if (strncmp(line, "MemAvailable:", 13) == 0)
-                    sscanf(line + 13, "%lu", &mem_avail);
-            }
-            fclose(fp);
-        }
-    }
-
-    /* Uptime */
-    {
-        FILE *fp = fopen("/proc/uptime", "r");
-        if (fp) {
-            fscanf(fp, "%lf", &uptime);
-            fclose(fp);
-        }
-    }
-
-    double mem_used_pct = 0.0;
-    if (mem_total > 0 && mem_avail <= mem_total)
-        mem_used_pct = (double)(mem_total - mem_avail) * 100.0 / (double)mem_total;
-
-    snprintf(out, size,
-        "{\n"
-        "  \"cpu_percent\":%.1f,\n"
-        "  \"mem_total_kb\":%lu,\n"
-        "  \"mem_avail_kb\":%lu,\n"
-        "  \"mem_used_pct\":%.1f,\n"
-        "  \"uptime_sec\":%.1f\n"
-        "}\n",
-        cpu, mem_total, mem_avail, mem_used_pct, uptime);
-}
-
-/* ---- snapshot list ---- */
-static void build_snapshots_list_json(char *out, size_t size)
-{
-    char *pos = out;
-    size_t rem = size;
-    int written = snprintf(pos, rem, "[");
-    if (written < 0) written = 0;
-    pos += written; rem -= (size_t)written;
-
-    FILE *fp = popen(
-        "ls -t /var/log/edgeguard/snapshots/*.jpg 2>/dev/null | head -20",
-        "r");
-    if (fp) {
-        char line[512];
-        int first = 1;
-        while (fgets(line, sizeof(line), fp) && rem > 128) {
-            size_t len = strlen(line);
-            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
-            if (!line[0]) continue;
-            /* extract just filename */
-            char *name = strrchr(line, '/');
-            const char *fname = name ? name + 1 : line;
-            written = snprintf(pos, rem,
-                "%s{\"path\":\"%s\",\"name\":\"%s\"}",
-                first ? "" : ",\n ", line, fname);
-            if (written < 0) written = 0;
-            pos += written; rem -= (size_t)written;
-            first = 0;
-        }
-        pclose(fp);
-    }
-    written = snprintf(pos, rem, "\n]\n");
-    if (written > 0) { pos += written; rem -= (size_t)written; }
-    (void)rem;
-}
-
-/* ---- alarm stats aggregation ---- */
-static void build_alarm_stats_json(char *out, size_t size)
-{
-    sqlite3 *db = NULL;
-    int rc = sqlite3_open_v2(ALARM_DB_PATH, &db, SQLITE_OPEN_READONLY, NULL);
-    if (rc != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        snprintf(out, size, "[]\n");
-        return;
-    }
-
-    const char *sql =
-        "SELECT DATE(timestamp) as day, state, COUNT(*) as cnt "
-        "FROM alarm_events "
-        "WHERE timestamp >= DATE('now', '-7 days') "
-        "GROUP BY day, state ORDER BY day ASC;";
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        sqlite3_close(db);
-        snprintf(out, size, "[]\n");
-        return;
-    }
-
-    char *pos = out;
-    size_t rem = size;
-    int written = snprintf(pos, rem, "[");
-    if (written < 0) written = 0;
-    pos += written; rem -= (size_t)written;
-
-    int first = 1;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char *day = (const char *)sqlite3_column_text(stmt, 0);
-        const char *state = (const char *)sqlite3_column_text(stmt, 1);
-        int cnt = sqlite3_column_int(stmt, 2);
-        if (rem < 128) break;
-        written = snprintf(pos, rem,
-            "%s{\"day\":\"%s\",\"state\":\"%s\",\"count\":%d}",
-            first ? "" : ",\n ", day ? day : "", state ? state : "", cnt);
-        if (written < 0) written = 0;
-        pos += written; rem -= (size_t)written;
-        first = 0;
-    }
-    written = snprintf(pos, rem, "\n]\n");
-    if (written > 0) { pos += written; rem -= (size_t)written; }
-    (void)rem;
-
-    sqlite3_finalize(stmt);
-    sqlite3_close(db);
-}
-
 /* ---- per-connection handler (runs in a detached thread) ---- */
 static void *connection_handler(void *arg)
 {
@@ -1598,9 +1053,6 @@ static void *connection_handler(void *arg)
         return NULL;
     }
 
-    fprintf(stderr, "[edgeguard_httpd] REQ: method=%s path=%s\n",
-            method, path);
-
     /* separate path from query string */
     char *query = strchr(path, '?');
     if (query) {
@@ -1610,9 +1062,9 @@ static void *connection_handler(void *arg)
 
     char resp[RESP_BUF_SIZE];
 
-    /* ---- auth check for all operations (except CORS + SSE stream) ---- */
+    /* ---- auth check for write operations ---- */
 #if AUTH_ENABLE
-    if (strcmp(method, "OPTIONS") != 0 && strcmp(path, "/api/stream") != 0) {
+    if (!strcmp(path, "/api/cmd")) {
         int authed = 0;
         const char *auth_hdr = strstr(buf, "Authorization: Basic ");
         if (auth_hdr) {
@@ -1632,13 +1084,7 @@ static void *connection_handler(void *arg)
                 snprintf(expected, sizeof(expected), "%s:%s", g_auth_user, g_auth_pass);
                 if (!strcmp(decoded, expected))
                     authed = 1;
-                fprintf(stderr, "[edgeguard_httpd] AUTH: b64='%s' decoded='%s' expected='%s' match=%d\n",
-                        b64, decoded, expected, authed);
-            } else {
-                fprintf(stderr, "[edgeguard_httpd] AUTH: base64_decode failed for '%s'\n", b64);
             }
-        } else {
-            fprintf(stderr, "[edgeguard_httpd] AUTH: no Authorization header found\n");
         }
         if (!authed) {
             build_401(resp, sizeof(resp));
@@ -1651,19 +1097,7 @@ static void *connection_handler(void *arg)
 
     /* ---- route dispatch ---- */
     if (!strcmp(method, "GET") && !strcmp(path, "/")) {
-        /* Dashboard HTML is ~85 KB — too large for stack on ARM.
-         * Allocate on heap to avoid silent stack-overflow crash. */
-        char *dash_resp = malloc(DASH_RESP_BUF_SIZE);
-        if (dash_resp) {
-            build_dashboard_response(dash_resp, DASH_RESP_BUF_SIZE);
-            send_response(client_fd, dash_resp);
-            free(dash_resp);
-        } else {
-            static const char *oom = "HTTP/1.1 500\r\nContent-Length: 0\r\n\r\n";
-            send_response(client_fd, oom);
-        }
-        close(client_fd);
-        return NULL;
+        build_dashboard_response(resp, sizeof(resp));
 
     } else if (!strcmp(method, "GET") && !strcmp(path, "/api/status")) {
         build_status_response(resp, sizeof(resp));
@@ -1713,33 +1147,7 @@ static void *connection_handler(void *arg)
                                ? body_len : (int)sizeof(json) - 1;
                 memcpy(json, body, copy_len);
                 json[copy_len] = '\0';
-
-                /* intercept delete_old_alarms — handle directly via SQLite,
-                 * because sensor_hubd does not know this command */
-                if (strstr(json, "delete_old_alarms")) {
-                    int keep = 100;
-                    const char *kp = strstr(json, "\"keep\"");
-                    if (kp) {
-                        kp = strstr(kp, ":");
-                        if (kp) { kp++; while (*kp == ' ' || *kp == '\t') kp++; keep = atoi(kp); }
-                    }
-                    if (keep < 1) keep = 1;
-                    sqlite3 *db = NULL;
-                    if (sqlite3_open_v2(ALARM_DB_PATH, &db,
-                            SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK && db) {
-                        char *err = NULL;
-                        char del_sql[256];
-                        snprintf(del_sql, sizeof(del_sql),
-                            "DELETE FROM alarm_events WHERE id NOT IN "
-                            "(SELECT id FROM alarm_events ORDER BY id DESC LIMIT %d);",
-                            keep);
-                        sqlite3_exec(db, del_sql, NULL, NULL, &err);
-                        if (err) sqlite3_free(err);
-                        sqlite3_close(db);
-                    }
-                } else {
-                    write_cmd_file(json);
-                }
+                write_cmd_file(json);
             }
         }
         build_cmd_ok_response(resp, sizeof(resp));
@@ -1847,24 +1255,9 @@ static void *connection_handler(void *arg)
 
     } else if (!strcmp(method, "GET") && !strcmp(path, "/api/alarms")) {
         int limit = 50;
-        char filter_state[32] = "";
-        char filter_from[32]  = "";
-        char filter_to[32]    = "";
         if (query) {
             const char *lp = strstr(query, "limit=");
             if (lp) { lp += 6; limit = atoi(lp); if (limit <= 0) limit = 50; }
-            lp = strstr(query, "state=");
-            if (lp) { lp += 6;
-                int i = 0; while (*lp && *lp != '&' && i < 31) filter_state[i++] = *lp++;
-                filter_state[i] = '\0'; url_decode(filter_state); }
-            lp = strstr(query, "from=");
-            if (lp) { lp += 5;
-                int i = 0; while (*lp && *lp != '&' && i < 31) filter_from[i++] = *lp++;
-                filter_from[i] = '\0'; }
-            lp = strstr(query, "to=");
-            if (lp) { lp += 3;
-                int i = 0; while (*lp && *lp != '&' && i < 31) filter_to[i++] = *lp++;
-                filter_to[i] = '\0'; }
         }
         /* heap alloc — RESP_BUF_SIZE already 32KB on stack (thread stack=64KB) */
         int abuf_size = RESP_BUF_SIZE - 512;
@@ -1877,10 +1270,7 @@ static void *connection_handler(void *arg)
             close(client_fd);
             return NULL;
         }
-        build_alarms_json(alarms_json, abuf_size, limit,
-                          filter_state[0] ? filter_state : NULL,
-                          filter_from[0]  ? filter_from  : NULL,
-                          filter_to[0]    ? filter_to    : NULL);
+        build_alarms_json(alarms_json, abuf_size, limit);
         size_t blen = strlen(alarms_json);
         snprintf(resp, sizeof(resp),
                  "HTTP/1.1 200 OK\r\n"
@@ -1932,63 +1322,6 @@ static void *connection_handler(void *arg)
         send_response(client_fd, resp);
         close(client_fd);
         return NULL;
-
-    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/services")) {
-        char svc[1024];
-        build_services_json(svc, sizeof(svc));
-        size_t slen = strlen(svc);
-        snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\n"
-                 "Content-Type: application/json\r\n"
-                 "Content-Length: %zu\r\n"
-                 "Connection: close\r\n"
-                 "Access-Control-Allow-Origin: *\r\n"
-                 "\r\n"
-                 "%s", slen, svc);
-
-    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/snapshots/list")) {
-        char slist[8192];
-        build_snapshots_list_json(slist, sizeof(slist));
-        size_t slen = strlen(slist);
-        snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\n"
-                 "Content-Type: application/json\r\n"
-                 "Content-Length: %zu\r\n"
-                 "Connection: close\r\n"
-                 "Access-Control-Allow-Origin: *\r\n"
-                 "\r\n"
-                 "%s", slen, slist);
-
-    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/alarms/stats")) {
-        char *astats = malloc(RESP_BUF_SIZE - 512);
-        if (astats) {
-            build_alarm_stats_json(astats, RESP_BUF_SIZE - 512);
-            size_t alen = strlen(astats);
-            snprintf(resp, sizeof(resp),
-                     "HTTP/1.1 200 OK\r\n"
-                     "Content-Type: application/json\r\n"
-                     "Content-Length: %zu\r\n"
-                     "Connection: close\r\n"
-                     "Access-Control-Allow-Origin: *\r\n"
-                     "\r\n"
-                     "%s", alen, astats);
-            free(astats);
-        } else {
-            build_404(resp, sizeof(resp));
-        }
-
-    } else if (!strcmp(method, "GET") && !strcmp(path, "/api/system/stats")) {
-        char sstats[1024];
-        build_system_stats_json(sstats, sizeof(sstats));
-        size_t slen = strlen(sstats);
-        snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\n"
-                 "Content-Type: application/json\r\n"
-                 "Content-Length: %zu\r\n"
-                 "Connection: close\r\n"
-                 "Access-Control-Allow-Origin: *\r\n"
-                 "\r\n"
-                 "%s", slen, sstats);
 
     } else if (!strcmp(method, "OPTIONS")) {
         /* CORS preflight */
@@ -2091,13 +1424,6 @@ int main(int argc, char *argv[])
     printf("[edgeguard_httpd] listening on %s:%d\n", ip, g_port);
     printf("[edgeguard_httpd] status: %s  cmd: %s\n",
            g_status_path, g_cmd_path);
-    printf("[edgeguard_httpd] stack_buf=%d bytes, dash_heap_buf=%d KB, thread_stack=%d KB\n",
-           RESP_BUF_SIZE, DASH_RESP_BUF_SIZE / 1024, 128);
-    {
-        const char *html = get_dashboard_html();
-        printf("[edgeguard_httpd] dashboard HTML raw size=%zu bytes\n",
-               strlen(html));
-    }
 
     while (g_running) {
         fd_set rfds;
@@ -2127,7 +1453,7 @@ int main(int argc, char *argv[])
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        pthread_attr_setstacksize(&attr, 128 * 1024);  /* 128 KB — HTML uses heap, not stack */
+        pthread_attr_setstacksize(&attr, 64 * 1024);
 
         if (pthread_create(&tid, &attr, connection_handler,
                           (void *)(intptr_t)client_fd) != 0) {
