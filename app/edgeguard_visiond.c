@@ -25,6 +25,7 @@
 #define SNAPSHOT_DIR            "/var/log/edgeguard/snapshots"
 #define VISION_JSON_PATH        "/tmp/edgeguard_vision.json"
 #define VISION_JSON_TMP         "/tmp/edgeguard_vision.json.tmp"
+#define FACE_COUNT_FILE         "/var/log/edgeguard/face_count.dat"
 #define MAX_SNAPSHOTS           50         /* keep at most this many snapshots */
 
 /* Motion detection: JPEG-size-based heuristic.
@@ -55,11 +56,36 @@ static int    g_tamper_streak = 0;  /* consecutive small frames in tamper mode *
 static time_t g_last_cmd_mtime = 0; /* for cmd file change detection */
 static int    g_last_face_count = 0;    /* latched face count */
 static int    g_face_latch_left = 0;    /* remaining cycles to hold latch */
+static int    g_total_face_count = 0;   /* cumulative faces detected, never resets */
+static char   g_last_face_snap[512];    /* snapshot path from last face detection */
 
 static void handle_signal(int sig)
 {
     (void)sig;
     g_running = 0;
+}
+
+/* ---- cumulative face count persistence ---- */
+static void save_face_count(void)
+{
+    FILE *fp = fopen(FACE_COUNT_FILE, "w");
+    if (fp) {
+        fprintf(fp, "%d\n", g_total_face_count);
+        fclose(fp);
+    }
+}
+
+static void load_face_count(void)
+{
+    FILE *fp = fopen(FACE_COUNT_FILE, "r");
+    if (fp) {
+        int saved = 0;
+        if (fscanf(fp, "%d", &saved) == 1 && saved > 0)
+            g_total_face_count = saved;
+        fclose(fp);
+        printf("[visiond] restored total_face_count=%d from %s\n",
+               g_total_face_count, FACE_COUNT_FILE);
+    }
 }
 
 static void msleep_user(unsigned int ms)
@@ -201,6 +227,9 @@ static void write_vision_json(int camera_online, int motion_detected,
     fprintf(fp, "  \"motion_detected\": %s,\n",
             motion_detected ? "true" : "false");
     fprintf(fp, "  \"face_count\": %d,\n", face_count);
+    fprintf(fp, "  \"total_face_count\": %d,\n", g_total_face_count);
+    fprintf(fp, "  \"last_face_snapshot\": \"%s\",\n",
+            g_last_face_snap[0] ? g_last_face_snap : "");
     if (sp)
         fprintf(fp, "  \"snapshot_path\": \"%s\",\n", sp);
     else
@@ -224,6 +253,9 @@ static void write_vision_json(int camera_online, int motion_detected,
 
     fclose(fp);
     rename(VISION_JSON_TMP, VISION_JSON_PATH);
+
+    /* persist cumulative face count */
+    save_face_count();
 }
 
 /* ---- usage ---- */
@@ -273,6 +305,9 @@ int main(int argc, char *argv[])
 
     /* ensure snapshot directory exists */
     ensure_dir(SNAPSHOT_DIR);
+
+    /* restore cumulative face count from previous runs */
+    load_face_count();
 
     /* initialize face detection + recognition (stub if ncnn not available) */
     face_detect_init("/etc/edgeguard/models");
@@ -356,6 +391,13 @@ int main(int argc, char *argv[])
                 face_verify_run(frame.data, (int)frame.size,
                                 match_user, sizeof(match_user), &match_conf);
 
+                /* accumulate face count and remember snapshot path */
+                if (face_count > 0) {
+                    g_total_face_count += face_count;
+                    snprintf(g_last_face_snap, sizeof(g_last_face_snap),
+                             "%s", PREVIEW_JPEG_PATH);
+                }
+
                 /* total inference time (capture + face detect + verify) */
                 struct timespec t2;
                 clock_gettime(CLOCK_MONOTONIC, &t2);
@@ -407,6 +449,7 @@ int main(int argc, char *argv[])
                 face_detect_run(frame.data, (int)frame.size, &face_count);
                 if (face_count > 0) {
                     printf("[visiond] FACE detected  count=%d\n", face_count);
+                    g_total_face_count += face_count;
                     g_last_face_count = face_count;
                     g_face_latch_left = 5;  /* hold for ~10s (5 cycles × 2s) */
                 }
@@ -446,6 +489,12 @@ int main(int argc, char *argv[])
                 snprintf(snapshot_path, sizeof(snapshot_path), "null");
             }
 
+            /* remember snapshot path when face was detected */
+            if (face_count > 0 && snapshot_path[0] != 'n') {
+                snprintf(g_last_face_snap, sizeof(g_last_face_snap),
+                         "%s", snapshot_path);
+            }
+
             /* write JSON for consumers */
             write_vision_json(camera_online, motion_detected,
                               face_count, snapshot_path, total_ms,
@@ -473,6 +522,7 @@ int main(int argc, char *argv[])
             write_vision_json(0, 0, 0, "null", 0, 0, 0, "", 0.0f);
     }
 
+    save_face_count();
     face_detect_deinit();
     printf("[visiond] stopped\n");
     return 0;

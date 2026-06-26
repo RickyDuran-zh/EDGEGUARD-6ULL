@@ -2,7 +2,7 @@
 
 基于 i.MX6ULL-S1 Pro 开发板的边缘安全监控系统。
 
-> **当前版本**：P1 摄像头集成已部署 | P2 人脸检测代码就绪（JPEG 解码待修复） | P3 人脸登录入口 + 遮挡检测已实现 | 最后更新：2026-06-17
+> **当前版本**：P2 JPEG 解码已修复（libjpeg-turbo） | P3 人脸识别开发中（MobileFaceNet） | Web UI SVG 图标 + Toggle 开关 | 一键部署 deploy.sh | 最后更新：2026-06-26
 
 ---
 
@@ -32,11 +32,11 @@ EdgeGuard-6ULL/
 │   ├── sqlite3.c / sqlite3.h   # SQLite 3.53.1 amalgamation（嵌入式数据库，编译进二进制）
 │   ├── camera_v4l2.h / .c      # V4L2 摄像头捕获封装（MJPEG 640×480, mmap 4缓冲, select超时3s, flush前2帧）
 │   ├── edgeguard_visiond.c     # 视觉守护进程：3模式(monitor/facelogin/tamper) + cmd监听 + 运动检测 + 遮挡检测 + 人脸检测 + vision.json输出
-│   ├── face_detect.h           # 人脸检测 C/C++ 桥接接口（extern "C"）
-│   ├── face_detect.c           # 纯 C stub 实现（P1/P3，零 AI 依赖，总是返回 face_count=0）
-│   ├── face_detect.cpp         # ncnn 完整推理实现（P2，Ultra-Light-Face-Detector + NMS + SSD prior box解码，已知问题：stb_image 无法解码 B525 MJPEG，待换 libjpeg-turbo）
-│   ├── test_face_detect.c      # 离线人脸检测测试程序（读取 JPEG 文件，打印检测结果）
-│   └── Makefile                # 交叉编译 makefile（6个target + C/C++ 分离编译 + edgeguard_visiond_face）
+│   ├── face_detect.h           # 人脸检测+识别 C/C++ 桥接接口（extern "C"，5个公开API）
+│   ├── face_detect.c           # 纯 C stub 实现（零 AI 依赖，总是返回 face_count=0，保证无 ncnn 时可编译）
+│   ├── face_detect.cpp         # ncnn 完整推理实现（-DEDGEGUARD_USE_NCNN）：libjpeg-turbo JPEG解码 → ultra_face 检测 → MobileFaceNet 128维识别 → cosine 相似度比对 → face_db.json 读写
+│   ├── face_register.c         # 人脸注册 CLI 工具：./face_register <用户名> <JPEG路径> → 提取特征 → 写入 face_db.json
+│   └── Makefile                # 交叉编译 makefile（7个target + C/C++ 分离编译 + edgeguard_visiond_face + face_register）
 │
 ├── ui/                         # Qt5 本地触摸屏界面（C++）
 │   ├── main.cpp                # 入口：QApplication + showFullScreen()
@@ -60,6 +60,8 @@ EdgeGuard-6ULL/
 │
 ├── scripts/                    # 部署与配置脚本
 │   ├── sync_to_vm.sh           # Windows → Ubuntu VM 代码同步
+│   ├── build_deploy.sh         # VM 端一键编译 + 打包到 sharedir（支持参数化：httpd|visiond|ui|...）
+│   ├── deploy.sh               # 开发板端一键部署（stop→cp→restart→clean，支持参数化）
 │   ├── install_services.sh     # 一键安装所有 systemd 服务
 │   ├── edgeguard.service       # sensor_hubd 服务单元
 │   ├── edgeguard-ui.service    # Qt UI 服务单元
@@ -139,6 +141,8 @@ EdgeGuard-6ULL/
 | `/var/log/edgeguard/alarms.db` | sensor_hubd | HTTP | 报警历史（SQLite WAL模式） |
 | `/var/log/edgeguard/snapshots/` | edgeguard_visiond | HTTP | 报警 JPEG 快照（最多50张，超出自动清理） |
 | `/etc/edgeguard/config.json` | sensor_hubd | sensor_hubd | 传感器阈值配置（首次启动自动生成，Web Settings 即时生效） |
+| `/etc/edgeguard/face_db.json` | face_register | edgeguard_visiond | 人脸数据库（128维embedding，cosine相似度比对） |
+| `/var/log/edgeguard/face_count.dat` | edgeguard_visiond | edgeguard_visiond | 累计人脸数量持久化（重启不丢失） |
 | `/etc/edgeguard/users.json` | 管理员 | Qt UI | LCD 登录用户凭证（可选，不存在则用默认值） |
 
 ---
@@ -157,14 +161,14 @@ EdgeGuard-6ULL/
 
 ### edgeguard_httpd — HTTP 服务器
 
-**Web Dashboard（多页面 SPA）**：4 个页面纯前端路由切换，零外部依赖。
+**Web Dashboard（多页面 SPA）**：4 个页面纯前端路由切换，零外部依赖，SVG 矢量图标替代 emoji。
 
 | 页面 | 内容 |
 |------|------|
-| **Dashboard** | 状态概览栏（State / Alarms / Uptime / IP）+ MPU6050 + AP3216C + 设备控制 + 按钮状态反馈 + 最近 5 条报警 |
-| **Alarms** | SQLite 报警历史表格（时间、级别徽章、原因、传感器详情） |
-| **Camera** | 实时快照预览 + 视觉检测结果（在线状态、运动、人脸计数、推理耗时） |
-| **Settings** | 6 项传感器阈值展示 + 系统信息 |
+| **Dashboard** | 4 卡片概览栏（状态/报警/运行/IP，SVG 图标前缀）+ MPU6050 + AP3216C + 设备控制（静音/确认/测试按钮含 SVG 图标）+ 最近 5 条报警 |
+| **Alarms** | SQLite 报警历史表格 + 分页 + 清理早期记录 |
+| **Camera** | 实时快照预览 + 6 卡片（摄像头/模式/运动/当前人脸/累计人脸/推理耗时）+ 最新快照路径 + 人脸快照路径 |
+| **Settings** | 6 项传感器阈值输入（卡片式 hover 高亮）+ 3 个 Toggle 开关（蜂鸣器/LED/日志）+ 系统信息 |
 
 **API 端点**：
 
@@ -215,6 +219,7 @@ EdgeGuard-6ULL/
 - **运动检测**：JPEG 帧文件大小变化启发式检测（阈值 15%），零 AI 依赖
 - **遮挡检测（P3 新增）**：连续 3 帧 JPEG size < 5KB（纯黑/纯白画面）→ `tamper_detected: true`
 - **快照留存**：monitor/tamper 模式下每帧保存到 `/var/log/edgeguard/snapshots/`，**最多保留 50 张**（超出自动删最旧）；facelogin 模式不存快照
+- **累计人脸**：`g_total_face_count` 跨帧累计，持久化到 `/var/log/edgeguard/face_count.dat`（重启不丢失）
 - **自动恢复**：摄像头拔出/插入自动重连（hotplug），掉线期间写 `camera_online: false`
 - **内核依赖**：`CONFIG_USB_VIDEO_CLASS=m`（uvcvideo.ko），B525 即插即用
 - **详细方案**：参见 `plan/AI_CAMERA_PLAN.md`、`plan/p3-face-login-plan.md`
@@ -222,15 +227,17 @@ EdgeGuard-6ULL/
 **输出格式** (`/tmp/edgeguard_vision.json`)：
 ```json
 {
-  "mode": "tamper",
+  "mode": "monitor",
   "camera_online": true,
   "motion_detected": false,
-  "face_count": 0,
-  "snapshot_path": "/var/log/edgeguard/snapshots/20260617_120000.jpg",
+  "face_count": 1,
+  "total_face_count": 42,
+  "last_face_snapshot": "/tmp/edgeguard_camera_preview.jpg",
+  "snapshot_path": "/var/log/edgeguard/snapshots/20260626_120000.jpg",
   "preview_path": "null",
   "tamper_detected": false,
-  "inference_ms": 35,
-  "timestamp": "2026-06-17 12:00:00",
+  "inference_ms": 85,
+  "timestamp": "2026-06-26 12:00:00",
   "face_verify_result": null
 }
 ```
@@ -255,24 +262,32 @@ echo '{"cmd":"vision_mode","mode":"tamper"}'    > /tmp/edgeguard_cmd.json  # 登
 echo '{"cmd":"vision_mode","mode":"monitor"}'   > /tmp/edgeguard_cmd.json  # 恢复默认
 ```
 
-### face_detect — 人脸检测模块（P2 代码完成，JPEG 解码待修复）
+### face_detect — 人脸检测+识别模块（P2 ✅ 完成, P3 开发中）
 
 - **双模式架构**：
-  - **Stub 模式**（P1/P3 默认）：`face_detect.c` 纯 C，零依赖，总是返回 `face_count=0`，功能不受影响
-  - **NCNN 模式**：`face_detect.cpp`（`-DEDGEGUARD_USE_NCNN`），Ultra-Light-Face-Detector-1MB (RFB-320) 模型推理
-- **接口**：纯 C 接口（`extern "C"`），visiond 直接调用，不感知底层实现
-- **推理流程**：JPEG → JPEG 解码 RGB → 缩放 320×240 → ncnn 推理 → SSD prior box 解码（4420 anchor boxes）→ NMS → face_count
-- **性能预估**：~300-600ms/帧（Cortex-A7 @ 800MHz + NEON），仅在运动触发时运行，节省 CPU
-- **模型文件**：`/etc/edgeguard/models/ultra_face.param` + `ultra_face.bin`（int8 量化 ~300KB）
-- **编译命令**：`make edgeguard_visiond_face NCNN_DIR=/path/to/ncnn STB_DIR=/path/to/stb`
+  - **Stub 模式**（默认）：`face_detect.c` 纯 C，零依赖，总是返回 `face_count=0`，保证无 ncnn 时可编译运行
+  - **NCNN 模式**：`face_detect.cpp`（`-DEDGEGUARD_USE_NCNN`），两个 AI 模型协同工作
+- **接口**：纯 C 接口（`extern "C"`），5 个公开 API：
+  | 函数 | 用途 |
+  |------|------|
+  | `face_detect_init()` | 加载 ultra_face 模型 + 预计算 4420 个 SSD 先验框 |
+  | `face_detect_run()` | JPEG → libjpeg 解码 → 检测 → 返回 face_count |
+  | `face_recog_init()` | 加载 MobileFaceNet 模型 + face_db.json |
+  | `face_verify_run()` | 完整管线：检测 → 对齐(112×96) → 提取 128 维 → cosine 比对 → 匹配结果 |
+  | `face_register_user()` | 注册新用户：检测 → 提取特征 → 写入 face_db.json |
+- **检测模型**：Ultra-Light-Face-Detector-1MB (RFB-320)，输入 320×240 RGB，输出 4420 候选框 → NMS(IoU=0.4)→ 置信度≥0.7
+- **识别模型**：MobileFaceNet，输入 112×96 RGB（模型自带归一化），输出 128 维 L2 归一化向量 → cosine 相似度≥0.55 匹配
+- **JPEG 解码**：libjpeg-turbo（`jpeg_mem_src()` + setjmp 错误处理），已替换 stb_image ✅
+- **模型文件**（`/etc/edgeguard/models/`）：`ultra_face.param/.bin` + `mobilefacenet.param/.bin`
+- **人脸数据库**：`/etc/edgeguard/face_db.json`，最多 10 用户，128 维 float embedding
+- **注册工具**：`./face_register <用户名> <JPEG路径>` — 离线录入新用户
+- **编译命令**：`make edgeguard_visiond_face NCNN_DIR=/path/to/ncnn JPEG_DIR=/opt/libjpeg-arm`
 
-**已知问题**：
-- ✅ ncnn 模型加载正常，SSD 解码 + NMS 逻辑正确（互联网 JPEG 可正常检测到人脸，离线测试通过）
-- ❌ **stb_image 无法正确解码 B525 摄像头的 MJPEG 帧**（解码后为纯绿色图像 → face_count=0）
-- 🔧 **待修复**：替换 stb_image → libjpeg-turbo，在开发板上安装 `libjpeg62-turbo-dev` 或交叉编译
-- 📍 **相关文件**：`app/face_detect.cpp` 中的 `stbi_load_from_memory()` 调用（需替换为 libjpeg API）
-
-**状态**：模型 + 推理 + 解码逻辑完成 ✅ | JPEG 解码器待替换 🔧 | 替换后无需改 UI 代码即可自动生效
+**当前状态**：
+- ✅ 人脸检测（ultra_face + libjpeg-turbo）：测试通过，`face_count` 正常
+- ✅ 模型加载：ultra_face + MobileFaceNet 均加载成功
+- 🔧 MobileFaceNet extract 调试中：`ex.extract("fc1")` 返回非 0，待确认输出层名
+- 📍 相关文件：`app/face_detect.cpp`（928行核心引擎）、`app/face_register.c`（CLI 注册工具）
 
 ### P3 人脸登录入口 + 遮挡检测（✅ 已实现）
 
@@ -356,13 +371,14 @@ bash scripts/sync_to_vm.sh
 cd ~/Desktop/EdgeGuard-6ULL/EdgeGard-6ULL/app
 make all
 # 产物:
-#   sensor_hubd          — 核心守护进程（含 SQLite）
-#   edgeguard_httpd      — HTTP 服务器（含 SQLite）
-#   edgeguard_mqttd      — MQTT 客户端
-#   edgeguard_visiond    — 视觉守护进程（P1，含 face_detect stub）
+#   sensor_hubd               — 核心守护进程（含 SQLite）
+#   edgeguard_httpd           — HTTP 服务器（含 SQLite）
+#   edgeguard_mqttd           — MQTT 客户端
+#   edgeguard_visiond         — 视觉守护进程（含 face_detect stub）
 
-# P2 人脸检测版（需要先交叉编译 ncnn + 下载 stb_image.h）：
-# make edgeguard_visiond_face NCNN_DIR=/home/user/ncnn STB_DIR=/home/user/stb
+# 人脸识别版（需要先交叉编译 ncnn + libjpeg-turbo）：
+# make edgeguard_visiond_face NCNN_DIR=/home/user/ncnn JPEG_DIR=/opt/libjpeg-arm
+# make face_register          NCNN_DIR=/home/user/ncnn JPEG_DIR=/opt/libjpeg-arm
 ```
 
 ### 编译 UI（在 VM 上）
@@ -377,11 +393,15 @@ make
 ### 部署到板子
 
 ```bash
-# 拷贝二进制到板子
+# 方式一：一键部署（推荐）
+# 将编译产物拷贝到 VM 的 sharedir，然后在开发板上执行：
+sudo sh /imx6ull/scripts/deploy.sh            # 全部部署
+sudo sh /imx6ull/scripts/deploy.sh httpd      # 只部署 Web 服务
+sudo sh /imx6ull/scripts/deploy.sh ui visiond # 只部署 UI + 摄像头
+
+# 方式二：手动部署
 scp app/sensor_hubd app/edgeguard_httpd app/edgeguard_mqttd app/edgeguard_visiond root@192.168.10.2:/imx6ull/app/
 scp ui/edgeguard-ui root@192.168.10.2:/imx6ull/ui/
-
-# 拷贝 systemd 服务文件
 scp scripts/*.service root@192.168.10.2:/etc/systemd/system/
 
 # 在板子上安装并启动所有服务
@@ -389,10 +409,6 @@ ssh root@192.168.10.2
 systemctl daemon-reload
 systemctl enable edgeguard edgeguard-httpd edgeguard-mqttd edgeguard-visiond edgeguard-ui
 systemctl restart edgeguard edgeguard-httpd edgeguard-mqttd edgeguard-visiond edgeguard-ui
-
-# 验证视觉模块
-cat /tmp/edgeguard_vision.json | grep camera_online
-ls /var/log/edgeguard/snapshots/ | wc -l
 ```
 
 ### 网络配置（网线直连 PC）

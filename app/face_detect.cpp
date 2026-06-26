@@ -532,28 +532,62 @@ static int face_align(const unsigned char *rgb, int im_w, int im_h,
 
     ncnn::resize_bilinear(crop_mat, out, FACE_RECOG_INPUT_W, FACE_RECOG_INPUT_H);
 
-    /* normalise [0,255] → [-1, 1] for MobileFaceNet */
-    const float mean_vals[3]  = { 127.5f, 127.5f, 127.5f };
-    const float norm_vals[3]  = { 1.0f / 127.5f, 1.0f / 127.5f, 1.0f / 127.5f };
-    out.substract_mean_normalize(mean_vals, norm_vals);
+    /* normalization is built into the model (minusscalar0 + mulscalar0 layers),
+       so we pass raw [0,255] RGB directly and let the model handle it */
     return 0;
 }
 
-/* ---- extract 128-d embedding via MobileFaceNet ---- */
+/* ---- extract 128-d embedding via MobileFaceNet ----
+   The model's first two layers are BinaryOp _minusscalar0 (sub 127.5)
+   and BinaryOp _mulscalar0 (mul 0.007812).  ncnn's BinaryOp forward
+   returns -100 on this build, so we normalise manually and feed the
+   result directly to blob "_mulscalar0" (which is the input of the
+   first convolution). */
 static int extract_embedding(const ncnn::Mat &aligned_face, float *embedding)
 {
     if (!g_recog_net) return -1;
 
-    ncnn::Extractor ex = g_recog_net->create_extractor();
-    ex.input("data", aligned_face);
+    /* Manual normalisation: (pixel - 127.5) * 0.007812
+       aligned_face is [0,255] RGB, we need float32 [-0.992, 0.996] */
+    int total_pixels = aligned_face.w * aligned_face.h * aligned_face.c;
+    ncnn::Mat normalized;
+    normalized.create(aligned_face.w, aligned_face.h, aligned_face.c, 4u);
+    float *dst = normalized;
+    for (int i = 0; i < total_pixels; i++)
+        dst[i] = (aligned_face[i] - 127.5f) * 0.007812f;
 
-    ncnn::Mat out;
-    if (ex.extract("fc1", out) != 0) {
-        fprintf(stderr, "[face_detect] MobileFaceNet extract failed\n");
+    fprintf(stderr, "[face_detect] recog norm: w=%d h=%d c=%d elemsize=%zu  "
+            "data[0..2]=%.4f %.4f %.4f\n",
+            normalized.w, normalized.h, normalized.c, normalized.elemsize,
+            dst[0], dst[1], dst[2]);
+
+    ncnn::Extractor ex = g_recog_net->create_extractor();
+
+    /* Feed into _mulscalar0 — the blob AFTER both BinaryOp normalisation
+       layers, just before the first Convolution */
+    int in_ret = ex.input("_mulscalar0", normalized);
+    if (in_ret != 0) {
+        fprintf(stderr, "[face_detect] ex.input('_mulscalar0') FAILED ret=%d\n",
+                in_ret);
         return -1;
     }
 
-    int dim = out.w;
+    ncnn::Mat out;
+    int ext_ret = ex.extract("fc1", out, 0);
+    if (ext_ret != 0) {
+        /* try type=1 fallback */
+        ext_ret = ex.extract("fc1", out, 1);
+    }
+    if (ext_ret != 0) {
+        fprintf(stderr, "[face_detect] ex.extract('fc1') FAILED ret=%d\n",
+                ext_ret);
+        return -1;
+    }
+
+    fprintf(stderr, "[face_detect] recog output: w=%d h=%d c=%d elemsize=%zu\n",
+            out.w, out.h, out.c, out.elemsize);
+
+    int dim = out.w * out.h * out.c;
     if (dim > FACE_EMBEDDING_DIM) dim = FACE_EMBEDDING_DIM;
 
     /* L2-normalise */
@@ -561,7 +595,10 @@ static int extract_embedding(const ncnn::Mat &aligned_face, float *embedding)
     for (int i = 0; i < dim; i++)
         norm += out[i] * out[i];
     norm = sqrtf(norm);
-    if (norm < 1e-6f) return -1;
+    if (norm < 1e-6f) {
+        fprintf(stderr, "[face_detect] embedding norm too small: %.6f\n", norm);
+        return -1;
+    }
 
     for (int i = 0; i < dim; i++)
         embedding[i] = out[i] / norm;
@@ -600,6 +637,21 @@ int face_recog_init(const char *model_path)
     }
 
     g_recog_initialized = 1;
+
+    /* Dump blob names so we can confirm input/output layer names.
+       If this fails to compile (ncnn API too old), delete this block
+       and use: strings /etc/edgeguard/models/mobilefacenet.bin | head -50 */
+    {
+        const std::vector<const char *> &in_names  = g_recog_net->input_names();
+        const std::vector<const char *> &out_names = g_recog_net->output_names();
+        printf("[face_detect] recog input names (%zu): ", in_names.size());
+        for (size_t i = 0; i < in_names.size(); i++)
+            printf("'%s' ", in_names[i]);
+        printf("\n[face_detect] recog output names (%zu): ", out_names.size());
+        for (size_t i = 0; i < out_names.size(); i++)
+            printf("'%s' ", out_names[i]);
+        printf("\n");
+    }
 
     /* load existing face DB */
     load_face_db();
@@ -797,10 +849,10 @@ int face_register_user(const char *jpeg_path, const char *username)
 
     jpeg_create_decompress(&cinfo);
     jpeg_mem_src(&cinfo, data, len);
-    free(data);
 
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
         jpeg_destroy_decompress(&cinfo);
+        free(data);
         return -1;
     }
     cinfo.out_color_space = JCS_RGB;
@@ -810,13 +862,18 @@ int face_register_user(const char *jpeg_path, const char *username)
     channels = cinfo.output_components;
 
     rgb = (unsigned char *)malloc(im_w * im_h * channels);
-    if (!rgb) { jpeg_destroy_decompress(&cinfo); return -1; }
+    if (!rgb) {
+        jpeg_destroy_decompress(&cinfo);
+        free(data);
+        return -1;
+    }
     while (cinfo.output_scanline < cinfo.output_height) {
         unsigned char *row = rgb + cinfo.output_scanline * im_w * channels;
         jpeg_read_scanlines(&cinfo, &row, 1);
     }
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
+    free(data);  /* safe to free after decompress is done */
 
     /* Face detection */
     ncnn::Mat in = ncnn::Mat::from_pixels(rgb, ncnn::Mat::PIXEL_RGB, im_w, im_h);

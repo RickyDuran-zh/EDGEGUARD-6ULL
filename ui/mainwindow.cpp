@@ -110,7 +110,9 @@ MainWindow::MainWindow(QWidget *parent)
       m_camOnlineLabel(nullptr),
       m_camMotionLabel(nullptr),
       m_camFacesLabel(nullptr),
+      m_camTotalFacesLabel(nullptr),
       m_camSnapshotLabel(nullptr),
+      m_camFaceSnapLabel(nullptr),
       m_camInferenceLabel(nullptr),
       m_chart(nullptr),
       m_topBar(nullptr),
@@ -443,9 +445,14 @@ QWidget *MainWindow::buildVisionPage()
     grid->addWidget(makeCard("运动检测",      &m_camMotionLabel,    "--"),      0, 1);
     grid->addWidget(makeCard("人脸数量",  &m_camFacesLabel,     "0"),       1, 0);
     grid->addWidget(makeCard("推理耗时",   &m_camInferenceLabel, "--"),      1, 1);
+    grid->addWidget(makeCard("累计人脸",  &m_camTotalFacesLabel, "0"),       2, 0);
+    {
+        QWidget *snapCard = makeCard("人脸快照", &m_camFaceSnapLabel, "--");
+        grid->addWidget(snapCard, 2, 1);
+    }
     {
         QWidget *snapCard = makeCard("最新快照", &m_camSnapshotLabel, "--");
-        grid->addWidget(snapCard, 2, 0, 1, 2);
+        grid->addWidget(snapCard, 3, 0, 1, 2);
     }
     layout->addLayout(grid, 1);
 
@@ -772,10 +779,12 @@ QJsonObject MainWindow::makeDemoStatus()
     vision["camera_online"] = true;
     vision["motion_detected"] = (phase > 26);
     vision["face_count"] = (phase > 27) ? 1 : 0;
+    vision["total_face_count"] = (phase > 27) ? (3 + m_demoCounter / 30) : 0;
     vision["tamper_detected"] = (phase > 28);
     vision["preview_path"] = "null";
     vision["inference_ms"] = (phase > 27) ? 350 + (m_demoCounter % 200) : 8;
     vision["snapshot_path"] = (phase > 26) ? "/var/log/edgeguard/snapshots/demo_snap.jpg" : "null";
+    vision["last_face_snapshot"] = (phase > 27) ? "/var/log/edgeguard/snapshots/face_demo.jpg" : "";
 
     obj["mpu6050"] = mpu;
     obj["ap3216c"] = ap3216;
@@ -1003,9 +1012,17 @@ void MainWindow::applyStatus(const QJsonObject &obj, bool demo)
                                        ? "是" : "否");
         if (m_camFacesLabel)
             m_camFacesLabel->setText(QString::number(vision.value("face_count").toInt()));
+        if (m_camTotalFacesLabel)
+            m_camTotalFacesLabel->setText(QString::number(vision.value("total_face_count").toInt()));
         if (m_camInferenceLabel) {
             int ms = vision.value("inference_ms").toInt(0);
             m_camInferenceLabel->setText(ms > 0 ? QString("%1 ms").arg(ms) : "--");
+        }
+        if (m_camFaceSnapLabel) {
+            QString fs = vision.value("last_face_snapshot").toString();
+            m_camFaceSnapLabel->setText(fs.isEmpty() ? "--" : fs);
+            m_camFaceSnapLabel->setWordWrap(true);
+            m_camFaceSnapLabel->setStyleSheet("color: #8fb3d9; font-size: 11px;");
         }
         if (m_camSnapshotLabel) {
             QString sp = vision.value("snapshot_path").toString();

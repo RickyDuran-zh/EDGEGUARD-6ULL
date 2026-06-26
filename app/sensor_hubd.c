@@ -76,9 +76,11 @@ struct vision_data {
     int camera_online;
     int motion_detected;
     int face_count;
+    int total_face_count;
     int tamper_detected;
     int inference_ms;
     char snapshot_path[512];
+    char last_face_snapshot[512];
     int valid;
 };
 
@@ -303,12 +305,34 @@ static int read_vision(struct vision_data *v)
             if (p) v->face_count = atoi(p + 1);
         }
     }
+    /* total_face_count */
+    {
+        const char *p = strstr(buf, "\"total_face_count\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) v->total_face_count = atoi(p + 1);
+        }
+    }
     /* inference_ms */
     {
         const char *p = strstr(buf, "\"inference_ms\"");
         if (p) {
             p = strchr(p, ':');
             if (p) v->inference_ms = atoi(p + 1);
+        }
+    }
+    /* last_face_snapshot */
+    {
+        const char *p = strstr(buf, "\"last_face_snapshot\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) {
+                p++; while (*p == ' ' || *p == '"') p++;
+                int i = 0;
+                while (*p && *p != '"' && *p != '\n' && i < 511)
+                    v->last_face_snapshot[i++] = *p++;
+                v->last_face_snapshot[i] = '\0';
+            }
         }
     }
     /* snapshot_path */
@@ -611,8 +635,10 @@ static void write_status_json(const struct app_config *cfg,
         "    \"motion_detected\": %s,\n"
         "    \"tamper_detected\": %s,\n"
         "    \"face_count\": %d,\n"
+        "    \"total_face_count\": %d,\n"
         "    \"inference_ms\": %d,\n"
-        "    \"snapshot_path\": \"%s\"\n"
+        "    \"snapshot_path\": \"%s\",\n"
+        "    \"last_face_snapshot\": \"%s\"\n"
         "  },\n"
         "  \"device\": {\n"
         "    \"led\": \"%s\",\n"
@@ -631,7 +657,10 @@ static void write_status_json(const struct app_config *cfg,
         "    \"ps_warning_threshold\": %d,\n"
         "    \"ps_alarm_threshold\": %d,\n"
         "    \"motion_warning_threshold\": %d,\n"
-        "    \"motion_alarm_threshold\": %d\n"
+        "    \"motion_alarm_threshold\": %d,\n"
+        "    \"buzzer_enable\": %s,\n"
+        "    \"led_enable\": %s,\n"
+        "    \"log_enable\": %s\n"
         "  },\n"
         "  \"system\": {\n"
         "    \"uptime_sec\": %.0f,\n"
@@ -661,8 +690,10 @@ static void write_status_json(const struct app_config *cfg,
         (vis->valid && vis->motion_detected) ? "true" : "false",
         (vis->valid && vis->tamper_detected) ? "true" : "false",
         vis->valid ? vis->face_count : 0,
+        vis->valid ? vis->total_face_count : 0,
         vis->valid ? vis->inference_ms : 0,
         (vis->valid && vis->snapshot_path[0]) ? vis->snapshot_path : "",
+        (vis->valid && vis->last_face_snapshot[0]) ? vis->last_face_snapshot : "",
         g_cur_led,
         g_cur_buzzer,
         g_alarm_count,
@@ -675,6 +706,9 @@ static void write_status_json(const struct app_config *cfg,
         cfg->ps_alarm_th,
         cfg->motion_warning_th,
         cfg->motion_alarm_th,
+        cfg->buzzer_enable ? "true" : "false",
+        cfg->led_enable ? "true" : "false",
+        cfg->log_enable ? "true" : "false",
         uptime_s,
         ip);
 

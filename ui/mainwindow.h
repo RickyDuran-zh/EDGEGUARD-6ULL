@@ -100,7 +100,9 @@ private:
     QLabel *m_camOnlineLabel;
     QLabel *m_camMotionLabel;
     QLabel *m_camFacesLabel;
+    QLabel *m_camTotalFacesLabel;
     QLabel *m_camSnapshotLabel;
+    QLabel *m_camFaceSnapLabel;
     QLabel *m_camInferenceLabel;
 
     // Chart
